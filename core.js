@@ -162,7 +162,7 @@ export function totals(rows,banks=[]) {
 }
 export function groups(rows,key,banks=[]){
   const by=new Map();for(const r of rows){const g=String(r[key]||'Unassigned');if(!by.has(g))by.set(g,[]);by.get(g).push(r);}
-  return [...by].map(([name,list])=>({name,rows:list,...totals(list,banks)})).sort((a,b)=>(b.extra??-Infinity)-(a.extra??-Infinity)||a.name.localeCompare(b.name));
+  return [...by].map(([name,list])=>({name,...totals(list,banks),rows:list})).sort((a,b)=>(b.extra??-Infinity)-(a.extra??-Infinity)||a.name.localeCompare(b.name));
 }
 export function sortRows(rows,key,direction='desc',banks=[]) {
   const sign=direction==='asc'?1:-1;
