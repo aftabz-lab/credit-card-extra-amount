@@ -67,27 +67,51 @@ function remoteSignature(meta) {
   return [meta.id || '', meta.name || '', meta.size || '', meta.modifiedTime || ''].join('|');
 }
 
+const creditNameHint = (meta) => /credit[\s_-]*card/i.test(meta.name);
+const zoneNameHint = (meta) => /zone[\s_-]*distribut/i.test(meta.name);
+
 async function readBothSources() {
   const drive = await driveClient();
-  const files = await listCandidateFiles(drive);
-  if (!files.length) throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
+  const all = await listCandidateFiles(drive);
+  if (!all.length) throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
+  // This shared folder also holds files for other dashboards (Z-Report, Trend,
+  // Visit Schedule, etc.). Files whose name clearly identifies them are tried
+  // first and exclusively for that source, so an unrelated file elsewhere in
+  // the folder can never block or replace the intended source. Only when no
+  // hinted file exists at all does this fall back to scanning the rest.
+  const creditHinted = all.filter(creditNameHint);
+  const zoneHinted = all.filter(zoneNameHint);
   let credit = null, zone = null;
   const errors = [];
-  for (const meta of files) {
-    if (credit && zone) break;
-    if (Number(meta.size) > 30 * 1024 * 1024) continue;
+  const sheetsCache = new Map();
+  async function tryFile(meta, { forCredit, forZone }) {
+    if (Number(meta.size) > 30 * 1024 * 1024) return;
     log('Checking', meta.name);
-    let sheets;
-    try {
-      const buffer = await downloadFile(drive, meta);
-      sheets = readWorkbookBuffer(buffer, meta.name);
-    } catch (e) {
-      errors.push({ name: meta.name, error: e.message });
-      continue;
+    const signature = remoteSignature(meta);
+    let sheets = sheetsCache.get(signature);
+    if (!sheets) {
+      try {
+        const buffer = await downloadFile(drive, meta);
+        sheets = readWorkbookBuffer(buffer, meta.name);
+        sheetsCache.set(signature, sheets);
+      } catch (e) {
+        errors.push({ name: meta.name, error: e.message });
+        return;
+      }
     }
-    const source = { fileName: meta.name, fileId: meta.id, modifiedTime: meta.modifiedTime, signature: remoteSignature(meta), folderId: FOLDER_ID };
-    if (!credit) { try { credit = parseCredit(sheets, source); } catch (e) { if (/credit\s*card/i.test(meta.name)) errors.push({ name: meta.name, error: e.message, kind: 'credit' }); } }
-    if (!zone) { try { zone = parseZone(sheets, source); } catch (e) { if (/zone.*distribut/i.test(meta.name)) errors.push({ name: meta.name, error: e.message, kind: 'zone' }); } }
+    const source = { fileName: meta.name, fileId: meta.id, modifiedTime: meta.modifiedTime, signature, folderId: FOLDER_ID };
+    if (forCredit && !credit) { try { credit = parseCredit(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
+    if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
+  }
+  for (const meta of creditHinted) { if (credit) break; await tryFile(meta, { forCredit: true, forZone: false }); }
+  for (const meta of zoneHinted) { if (zone) break; await tryFile(meta, { forCredit: false, forZone: true }); }
+  if (!credit || !zone) {
+    const tried = new Set([...creditHinted, ...zoneHinted].map((m) => m.id));
+    for (const meta of all) {
+      if (credit && zone) break;
+      if (tried.has(meta.id)) continue;
+      await tryFile(meta, { forCredit: !credit, forZone: !zone });
+    }
   }
   if (!credit || !zone) {
     throw new Error(`Could not validate ${!credit ? 'Credit Card' : ''}${!credit && !zone ? ' and ' : ''}${!zone ? 'Zone Distribution' : ''}. ${errors.slice(0, 2).map((e) => e.name + ': ' + e.error).join(' ')}`);
