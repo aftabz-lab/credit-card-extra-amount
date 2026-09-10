@@ -33,6 +33,8 @@ export async function publish(payload,baseCloudTime=null){
   return {published:true,payload:committed};
 }
 const candidate=meta=>!meta.name.startsWith('~$')&&(/\.(xlsx|xlsm|csv|tsv)$/i.test(meta.name)||meta.mimeType==='application/vnd.google-apps.spreadsheet');
+const creditNameHint=meta=>/credit[\s_-]*card/i.test(meta.name);
+const zoneNameHint=meta=>/zone[\s_-]*distribut/i.test(meta.name);
 async function download(meta){
   const Drive=window.ShwapnoDrive;
   if(meta.mimeType!=='application/vnd.google-apps.spreadsheet')return await deadline(Drive.downloadFile(meta),45000);
@@ -44,21 +46,40 @@ async function download(meta){
 const parsedCache=new Map();
 export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   const Drive=window.ShwapnoDrive;if(!Drive.cachedToken())throw new Error('Click Connect Google Drive to authorize this browser.');
-  const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const files=listed.filter(candidate).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
-  if(!files.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
+  const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const all=listed.filter(candidate).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
+  if(!all.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
+  // This shared folder also holds files for other dashboards. Files whose name
+  // clearly identifies them (e.g. "Credit Card.xlsx", "Zone Distribution ....xlsx")
+  // are tried first and exclusively for that source, so an unrelated file elsewhere
+  // in the folder can never block or replace the intended source. Only when no
+  // hinted file exists at all does this fall back to scanning the whole folder.
+  const creditHinted=all.filter(creditNameHint);const zoneHinted=all.filter(zoneNameHint);
   let credit=null,zone=null;const errors=[];const skipped=[];
-  for(const meta of files){
-    if(credit&&zone)break;
-    if(Number(meta.size)>30*1024*1024){skipped.push(meta.name);continue;}
+  async function tryFile(meta,{forCredit,forZone}){
+    if(Number(meta.size)>30*1024*1024){skipped.push(meta.name);return;}
     onStatus(`Checking ${meta.name}`);
     const signature=Drive.remoteSignature(meta);let sheets=parsedCache.get(signature);
-    try{if(!sheets){sheets=await readWorkbook(await download(meta));if(parsedCache.size>10)parsedCache.clear();parsedCache.set(signature,sheets);}}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message});continue;}
+    try{if(!sheets){sheets=await readWorkbook(await download(meta));if(parsedCache.size>10)parsedCache.clear();parsedCache.set(signature,sheets);}}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message});return;}
     const source={fileName:meta.name,fileId:meta.id,modifiedTime:meta.modifiedTime,signature,folderId:FOLDER_ID};
-    if(!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){if(/credit\s*card/i.test(meta.name))errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
-    if(!zone)try{zone=parseZone(sheets,source);}catch(e){if(/zone.*distribut/i.test(meta.name))errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
+    if(forCredit&&!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
+    if(forZone&&!zone)try{zone=parseZone(sheets,source);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
   }
-  if(!credit||!zone)throw new Error(`Could not validate ${!credit?'Credit Card':''}${!credit&&!zone?' and ':''}${!zone?'Zone Distribution':''}. ${errors.slice(0,2).map(e=>e.name+': '+e.error).join(' ')}${skipped.length?' Large files skipped: '+skipped.join(', '):''}`);
-  for(const e of errors)if(e.kind&&e.time>Date.parse((e.kind==='credit'?credit:zone).meta.modifiedTime))throw new Error(`Newer ${e.name} could not be validated. ${e.error} The previous snapshot has been kept.`);
+  for(const meta of creditHinted){if(credit)break;await tryFile(meta,{forCredit:true,forZone:false});}
+  for(const meta of zoneHinted){if(zone)break;await tryFile(meta,{forCredit:false,forZone:true});}
+  if(!credit||!zone){
+    // Fall back to the rest of the folder only for whichever source is still
+    // missing, and only consider files that were not already tried above.
+    const tried=new Set([...creditHinted,...zoneHinted].map(m=>m.id));
+    for(const meta of all){
+      if(credit&&zone)break;
+      if(tried.has(meta.id))continue;
+      await tryFile(meta,{forCredit:!credit,forZone:!zone});
+    }
+  }
+  if(!credit||!zone)throw new Error(`Could not validate ${!credit?'Credit Card':''}${!credit&&!zone?' and ':''}${!zone?'Zone Distribution':''}. ${errors.filter(e=>e.kind).slice(0,2).map(e=>e.name+': '+e.error).join(' ')||errors.slice(0,2).map(e=>e.name+': '+e.error).join(' ')}${skipped.length?' Large files skipped: '+skipped.join(', '):''}`);
+  // A newer unnamed file failing to parse no longer blocks publishing — only a
+  // newer file that was actually a candidate FOR THE SOURCE THAT WON does.
+  for(const e of errors)if(e.kind&&e.time>Date.parse((e.kind==='credit'?credit:zone).meta.modifiedTime)&&(e.kind==='credit'?creditNameHint({name:e.name}):zoneNameHint({name:e.name})))throw new Error(`Newer ${e.name} could not be validated. ${e.error} The previous snapshot has been kept.`);
   return {credit,zone};
 }
 export async function importFiles(files,schemaOverrides={}){
