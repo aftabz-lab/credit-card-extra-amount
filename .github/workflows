@@ -1,0 +1,38 @@
+name: Auto-sync Credit Card Extra Amount snapshot
+
+on:
+  schedule:
+    # Every 10 minutes. GitHub may delay a scheduled run under load; this is
+    # a ceiling on freshness, not a guarantee of exact timing.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: credit-card-auto-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sync-worker/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: sync-worker
+        run: npm ci
+
+      - name: Run sync
+        working-directory: sync-worker
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node auto-sync.mjs
