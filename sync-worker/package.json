@@ -1,0 +1,13 @@
+{
+  "name": "credit-card-extra-amount-sync-worker",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled server-side job that keeps the Credit Card Extra Amount dashboard snapshot fresh without requiring a browser tab to stay open.",
+  "scripts": {
+    "sync": "node auto-sync.mjs"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.1",
+    "googleapis": "^160.0.0"
+  }
+}

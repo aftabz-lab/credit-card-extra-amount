@@ -87,7 +87,8 @@ function metadata(table, source) {
 }
 export function parseCredit(sheets, source = {}, overrides = {}) {
   const t=detectTable(sheets,'credit',overrides); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
-  const warnings=[];let invalidNumbers=0, totalMismatch=0;
+  const meta=metadata(t,source);
+  const warnings=[];let invalidNumbers=0, totalMismatch=0, projectedFallback=0;
   for(let i=0;i<t.lines.length;i++) {
     const row=t.lines[i]||[]; const raw=Object.fromEntries(t.columns.map(c=>[c.key,row[c.index]??'']));
     const code=clean(get(t,row,'code')); const name=clean(get(t,row,'name')); const serial=clean(get(t,row,'serial'));
@@ -100,14 +101,17 @@ export function parseCredit(sheets, source = {}, overrides = {}) {
     if(reported!==null&&computed!==null&&Math.abs(reported-computed)>.011)totalMismatch++;
     if(extra===null) {warnings.push(`Row ${t.headerRow+i+1}: Extra Amount is unavailable.`);}
     const id=code?codeKey(code):`BLANK-${hash(JSON.stringify([name,raw]))}-${i}`;
-    records.push({id,code:codeKey(code),name,sourceLeader:clean(get(t,row,'leader')),sourceZonal:clean(get(t,row,'zonal')),extra,projection:number(get(t,row,'projection')),target:number(get(t,row,'target')),saving:number(get(t,row,'saving')),incentive:number(get(t,row,'incentive')),sales:number(get(t,row,'sales')),bankValues:values,raw,sourceRow:t.headerRow+i+1});
+    let projection=number(get(t,row,'projection'));
+    if(projection===null&&extra!==null&&meta.elapsedDays&&meta.monthDays){projection=extra/meta.elapsedDays*meta.monthDays;projectedFallback++;}
+    records.push({id,code:codeKey(code),name,sourceLeader:clean(get(t,row,'leader')),sourceZonal:clean(get(t,row,'zonal')),extra,projection,target:number(get(t,row,'target')),saving:number(get(t,row,'saving')),incentive:number(get(t,row,'incentive')),sales:number(get(t,row,'sales')),bankValues:values,raw,sourceRow:t.headerRow+i+1});
   }
   if(!records.length)throw new Error('The credit card table has no outlet data. The previous snapshot has been kept.');
   if(invalidNumbers)warnings.push(`${invalidNumbers} payment-channel cells contain non-numeric values. Blank cells are not assumed to be confirmed zero.`);
   if(totalMismatch)warnings.push(`${totalMismatch} rows have a reported Extra Amount different from their channel sum. Reported totals are used; review changed formulas or column rules.`);
+  if(projectedFallback)warnings.push(`${projectedFallback} rows had no saved Month End Projection, so it was calculated as Extra Amount ÷ ${meta.elapsedDays} elapsed days × ${meta.monthDays} days in the month.`);
   const counts=new Map();records.forEach(r=>{if(r.code)counts.set(r.code,(counts.get(r.code)||0)+1);});
   const dup=[...counts].filter(([,v])=>v>1);if(dup.length)warnings.push(`${dup.length} repeated outlet codes: all source rows are included, not silently removed.`);
-  return {records,banks,columns:t.columns,meta:metadata(t,source),preamble:t.preamble,warnings,duplicateCodes:dup.map(([k])=>k)};
+  return {records,banks,columns:t.columns,meta,preamble:t.preamble,warnings,duplicateCodes:dup.map(([k])=>k)};
 }
 export function parseZone(sheets, source={}) {
   const t=detectTable(sheets,'zone');const rows=[];
@@ -132,7 +136,8 @@ export function joinRows(credit,zone,overrides={}) {
     const leader=clean(manual.leader)||z?.leader||(!zone?r.sourceLeader:'')||'Unassigned';
     const zonal=clean(manual.zonal)||z?.zonal||(!zone?r.sourceZonal:'')||'Unassigned';
     if(manual.leader&&manual.zonal)mapping='manual';
-    return {...r,uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,excluded:Boolean(manual.excluded),manual};
+    const blankCode=!r.code;
+    return {...r,uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,excluded:blankCode?manual.excluded!==false:Boolean(manual.excluded),manual};
   });
 }
 export function metric(row,key,selectedBanks=[]) {
