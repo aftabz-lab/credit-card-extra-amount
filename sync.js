@@ -33,6 +33,10 @@ export async function publish(payload,baseCloudTime=null){
   return {published:true,payload:committed};
 }
 const candidate=meta=>!meta.name.startsWith('~$')&&(/\.(xlsx|xlsm|csv|tsv)$/i.test(meta.name)||meta.mimeType==='application/vnd.google-apps.spreadsheet');
+// The old reference workbook is retired as a source. It is never read again,
+// even as a fallback, even if it is still sitting in the shared Drive folder
+// or has a newer modified time than the current "Credit Card.xlsx" file.
+const isRetiredSource=meta=>/compiled[\s_-]*credit[\s_-]*card[\s_-]*extra[\s_-]*amount/i.test(meta.name);
 const creditNameHint=meta=>/credit[\s_-]*card/i.test(meta.name);
 const zoneNameHint=meta=>/zone[\s_-]*distribut/i.test(meta.name);
 async function download(meta){
@@ -46,7 +50,7 @@ async function download(meta){
 const parsedCache=new Map();
 export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   const Drive=window.ShwapnoDrive;if(!Drive.cachedToken())throw new Error('Click Connect Google Drive to authorize this browser.');
-  const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const all=listed.filter(candidate).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
+  const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const all=listed.filter(candidate).filter(m=>!isRetiredSource(m)).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
   if(!all.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
   // This shared folder also holds files for other dashboards. Files whose name
   // clearly identifies them (e.g. "Credit Card.xlsx", "Zone Distribution ....xlsx")
@@ -66,6 +70,14 @@ export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   }
   for(const meta of creditHinted){if(credit)break;await tryFile(meta,{forCredit:true,forZone:false});}
   for(const meta of zoneHinted){if(zone)break;await tryFile(meta,{forCredit:false,forZone:true});}
+  // If a file whose name clearly says "Credit Card" (or "Zone Distribution")
+  // exists but failed to parse, surface that as a real error rather than
+  // silently falling back to some other, older file that also matches the
+  // same name pattern (e.g. a stale "Compiled Credit Card Extra Amount..."
+  // file left in the folder) or to an unrelated file entirely. The fallback
+  // scan below only ever runs when NO hinted file exists at all.
+  if(!credit&&creditHinted.length){const failure=errors.find(e=>e.kind==='credit');throw new Error(`"${creditHinted[0].name}" could not be read as the Credit Card source.${failure?' '+failure.error:''} The previous snapshot has been kept.`);}
+  if(!zone&&zoneHinted.length){const failure=errors.find(e=>e.kind==='zone');throw new Error(`"${zoneHinted[0].name}" could not be read as the Zone Distribution source.${failure?' '+failure.error:''} The previous snapshot has been kept.`);}
   if(!credit||!zone){
     // Fall back to the rest of the folder only for whichever source is still
     // missing, and only consider files that were not already tried above.
