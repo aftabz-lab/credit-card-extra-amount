@@ -7,6 +7,7 @@ import { XMLParser } from 'fast-xml-parser';
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: '@_',
+  removeNSPrefix: true,
   parseTagValue: false,
   trimValues: false,
   isArray: (name) => ['row', 'c', 'si', 't', 'sheet', 'Relationship', 'mergeCell', 'sheetData'].includes(name),
@@ -105,12 +106,18 @@ export function readWorkbookBuffer(buffer, fileName = 'workbook.xlsx') {
     if (!sheetText) continue;
     const doc = xml(sheetText);
     const grid = [];
+    let nextRowIndex = 0;
     for (const row of arr(doc.worksheet?.sheetData?.[0]?.row)) {
-      const rowIndex = Number(attr(row, 'r')) - 1;
+      const explicitRow = Number(attr(row, 'r'));
+      const rowIndex = Number.isInteger(explicitRow) && explicitRow > 0 ? explicitRow - 1 : nextRowIndex;
+      nextRowIndex = rowIndex + 1;
       if (rowIndex > 200000) throw new Error('Workbook has too many formatted rows. Remove unused rows and save again.');
       const line = [];
+      let nextColumnIndex = 0;
       for (const cell of arr(row.c)) {
-        const i = col(attr(cell, 'r') || '');
+        const reference = attr(cell, 'r') || '';
+        const i = reference ? col(reference) : nextColumnIndex;
+        nextColumnIndex = i + 1;
         if (i < 0 || i > 500) continue;
         const type = attr(cell, 't');
         let val = cell.v != null ? text(cell.v) : '';
