@@ -67,8 +67,6 @@ function remoteSignature(meta) {
   return [meta.id || '', meta.name || '', meta.size || '', meta.modifiedTime || ''].join('|');
 }
 
-const creditNameHint = (meta) => /credit[\s_-]*card/i.test(meta.name);
-const zoneNameHint = (meta) => /zone[\s_-]*distribut/i.test(meta.name);
 // The old reference workbook is retired as a source. It is never read again,
 // even as a fallback, even if it is still sitting in the shared Drive folder
 // or has a newer modified time than the current "Credit Card.xlsx" file.
@@ -79,13 +77,9 @@ async function readBothSources() {
   const listed = await listCandidateFiles(drive);
   const all = listed.filter((m) => !isRetiredSource(m));
   if (!all.length) throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  // This shared folder also holds files for other dashboards (Z-Report, Trend,
-  // Visit Schedule, etc.). Files whose name clearly identifies them are tried
-  // first and exclusively for that source, so an unrelated file elsewhere in
-  // the folder can never block or replace the intended source. Only when no
-  // hinted file exists at all does this fall back to scanning the rest.
-  const creditHinted = all.filter(creditNameHint);
-  const zoneHinted = all.filter(zoneNameHint);
+  // Source identity comes from the validated table structure, never the file
+  // name. Drive already returns newest files first, so the newest valid Credit
+  // Card and Zone tables win independently.
   let credit = null, zone = null;
   const errors = [];
   const sheetsCache = new Map();
@@ -108,29 +102,9 @@ async function readBothSources() {
     if (forCredit && !credit) { try { credit = parseCredit(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
     if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
   }
-  for (const meta of creditHinted) { if (credit) break; await tryFile(meta, { forCredit: true, forZone: false }); }
-  for (const meta of zoneHinted) { if (zone) break; await tryFile(meta, { forCredit: false, forZone: true }); }
-  // If a file whose name clearly says "Credit Card" (or "Zone Distribution")
-  // exists but failed to parse, that is reported as a real error rather than
-  // silently falling back to some other, older file that happens to also
-  // match the same name pattern (e.g. a stale "Compiled Credit Card Extra
-  // Amount..." file left in the folder) or to an unrelated file entirely.
-  // The fallback below only ever runs when NO hinted file exists at all.
-  if (!credit && creditHinted.length) {
-    const failure = errors.find((e) => e.kind === 'credit');
-    throw new Error(`"${creditHinted[0].name}" could not be read as the Credit Card source.${failure ? ' ' + failure.error : ''} The previous snapshot has been kept.`);
-  }
-  if (!zone && zoneHinted.length) {
-    const failure = errors.find((e) => e.kind === 'zone');
-    throw new Error(`"${zoneHinted[0].name}" could not be read as the Zone Distribution source.${failure ? ' ' + failure.error : ''} The previous snapshot has been kept.`);
-  }
-  if (!credit || !zone) {
-    const tried = new Set([...creditHinted, ...zoneHinted].map((m) => m.id));
-    for (const meta of all) {
-      if (credit && zone) break;
-      if (tried.has(meta.id)) continue;
-      await tryFile(meta, { forCredit: !credit, forZone: !zone });
-    }
+  for (const meta of all) {
+    if (credit && zone) break;
+    await tryFile(meta, { forCredit: !credit, forZone: !zone });
   }
   if (!credit || !zone) {
     throw new Error(`Could not validate ${!credit ? 'Credit Card' : ''}${!credit && !zone ? ' and ' : ''}${!zone ? 'Zone Distribution' : ''}. ${errors.slice(0, 2).map((e) => e.name + ': ' + e.error).join(' ')}`);
