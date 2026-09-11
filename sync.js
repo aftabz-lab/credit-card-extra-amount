@@ -1,5 +1,5 @@
-import {readWorkbook} from './xlsx-reader.js';
-import {parseCredit,parseZone,zoneFromSnapshot} from './core.js?v=20260910-3';
+import {readWorkbook} from './xlsx-reader.js?v=20260911-4';
+import {parseCredit,parseZone,zoneFromSnapshot} from './core.js?v=20260911-4';
 import {readCloudSnapshot,publishCloudSnapshotIfUnchanged,getPublisherSession,signInPublisher,signOutPublisher} from './supabase-sync.js';
 export {getPublisherSession,signInPublisher,signOutPublisher};
 export const FOLDER_ID='16HTr8nfPz4P2PMr4QB0bjgwiD110Qd-0';
@@ -37,8 +37,6 @@ const candidate=meta=>!meta.name.startsWith('~$')&&(/\.(xlsx|xlsm|csv|tsv)$/i.te
 // even as a fallback, even if it is still sitting in the shared Drive folder
 // or has a newer modified time than the current "Credit Card.xlsx" file.
 const isRetiredSource=meta=>/compiled[\s_-]*credit[\s_-]*card[\s_-]*extra[\s_-]*amount/i.test(meta.name);
-const creditNameHint=meta=>/credit[\s_-]*card/i.test(meta.name);
-const zoneNameHint=meta=>/zone[\s_-]*distribut/i.test(meta.name);
 async function download(meta){
   const Drive=window.ShwapnoDrive;
   if(meta.mimeType!=='application/vnd.google-apps.spreadsheet')return await deadline(Drive.downloadFile(meta),45000);
@@ -52,12 +50,8 @@ export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   const Drive=window.ShwapnoDrive;if(!Drive.cachedToken())throw new Error('Click Connect Google Drive to authorize this browser.');
   const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const all=listed.filter(candidate).filter(m=>!isRetiredSource(m)).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
   if(!all.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  // This shared folder also holds files for other dashboards. Files whose name
-  // clearly identifies them (e.g. "Credit Card.xlsx", "Zone Distribution ....xlsx")
-  // are tried first and exclusively for that source, so an unrelated file elsewhere
-  // in the folder can never block or replace the intended source. Only when no
-  // hinted file exists at all does this fall back to scanning the whole folder.
-  const creditHinted=all.filter(creditNameHint);const zoneHinted=all.filter(zoneNameHint);
+  // Source identity comes from the validated table structure, never the file
+  // name. The newest valid Credit Card and Zone tables win independently.
   let credit=null,zone=null;const errors=[];const skipped=[];
   async function tryFile(meta,{forCredit,forZone}){
     if(Number(meta.size)>30*1024*1024){skipped.push(meta.name);return;}
@@ -68,30 +62,8 @@ export async function readDrive(schemaOverrides={},onStatus=()=>{}){
     if(forCredit&&!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
     if(forZone&&!zone)try{zone=parseZone(sheets,source);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
   }
-  for(const meta of creditHinted){if(credit)break;await tryFile(meta,{forCredit:true,forZone:false});}
-  for(const meta of zoneHinted){if(zone)break;await tryFile(meta,{forCredit:false,forZone:true});}
-  // If a file whose name clearly says "Credit Card" (or "Zone Distribution")
-  // exists but failed to parse, surface that as a real error rather than
-  // silently falling back to some other, older file that also matches the
-  // same name pattern (e.g. a stale "Compiled Credit Card Extra Amount..."
-  // file left in the folder) or to an unrelated file entirely. The fallback
-  // scan below only ever runs when NO hinted file exists at all.
-  if(!credit&&creditHinted.length){const failure=errors.find(e=>e.kind==='credit');throw new Error(`"${creditHinted[0].name}" could not be read as the Credit Card source.${failure?' '+failure.error:''} The previous snapshot has been kept.`);}
-  if(!zone&&zoneHinted.length){const failure=errors.find(e=>e.kind==='zone');throw new Error(`"${zoneHinted[0].name}" could not be read as the Zone Distribution source.${failure?' '+failure.error:''} The previous snapshot has been kept.`);}
-  if(!credit||!zone){
-    // Fall back to the rest of the folder only for whichever source is still
-    // missing, and only consider files that were not already tried above.
-    const tried=new Set([...creditHinted,...zoneHinted].map(m=>m.id));
-    for(const meta of all){
-      if(credit&&zone)break;
-      if(tried.has(meta.id))continue;
-      await tryFile(meta,{forCredit:!credit,forZone:!zone});
-    }
-  }
+  for(const meta of all){if(credit&&zone)break;await tryFile(meta,{forCredit:!credit,forZone:!zone});}
   if(!credit||!zone)throw new Error(`Could not validate ${!credit?'Credit Card':''}${!credit&&!zone?' and ':''}${!zone?'Zone Distribution':''}. ${errors.filter(e=>e.kind).slice(0,2).map(e=>e.name+': '+e.error).join(' ')||errors.slice(0,2).map(e=>e.name+': '+e.error).join(' ')}${skipped.length?' Large files skipped: '+skipped.join(', '):''}`);
-  // A newer unnamed file failing to parse no longer blocks publishing — only a
-  // newer file that was actually a candidate FOR THE SOURCE THAT WON does.
-  for(const e of errors)if(e.kind&&e.time>Date.parse((e.kind==='credit'?credit:zone).meta.modifiedTime)&&(e.kind==='credit'?creditNameHint({name:e.name}):zoneNameHint({name:e.name})))throw new Error(`Newer ${e.name} could not be validated. ${e.error} The previous snapshot has been kept.`);
   return {credit,zone};
 }
 export async function importFiles(files,schemaOverrides={}){

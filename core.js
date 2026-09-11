@@ -39,17 +39,21 @@ export function headerRole(header, overrides = {}) {
   for (const b of Object.keys(BANKS)) if (n.startsWith(b) && /^(extra|charge|cost|amount|fee)/.test(n.slice(b.length))) return 'bank';
   return 'other';
 }
-export function inferColumns(headers, lines, overrides = {}) {
+export function inferColumns(headers, lines, overrides = {}, channelIndexes = []) {
+  const channelSet=new Set(channelIndexes);
   const cols = headers.map((label, i) => {
     const samples = lines.map(r => r[i]).filter(v => v !== '' && v != null).slice(0, 200);
     const numeric = samples.length > 0 && samples.filter(v => number(v) != null).length / samples.length > .85;
-    return { key:String(label || '').trim(), index:i, label:String(label || '').trim(), role:headerRole(label, overrides), numeric };
+    const role=channelSet.has(i)&&!Object.hasOwn(overrides,String(label||'').trim())?'bank':headerRole(label, overrides);
+    return { key:String(label || '').trim(), index:i, label:String(label || '').trim(), role, numeric };
   }).filter(c => c.key);
-  // The supplied workbook has a contiguous payment-channel block before Extra Amount.
+  // Payment-channel columns form a contiguous block before Total Extra Amount.
+  // Known and newly introduced numeric channel headings are both accepted.
   const total = cols.find(c => c.role === 'extra');
   const bankPositions = cols.filter(c => c.role === 'bank').map(c => c.index);
-  if (total && bankPositions.length) {
-    const first = Math.min(...bankPositions);
+  const code = cols.find(c => c.role === 'code');
+  if (total && (bankPositions.length || code)) {
+    const first = bankPositions.length ? Math.min(...bankPositions) : code.index;
     for (const c of cols) if (c.role === 'other' && c.numeric && c.index > first && c.index < total.index && !Object.hasOwn(overrides,c.key) && !/sales|rate|percent|%|count|transaction|target|projection|amountpaid/i.test(c.key)) c.role = 'bank';
   }
   const used = new Set();
@@ -58,8 +62,12 @@ export function inferColumns(headers, lines, overrides = {}) {
 }
 function stackHeaderRows(upper, lower, overrides = {}) {
   const width=Math.max(upper?.length||0,lower?.length||0);const headers=[];
+  const channelStart=upper.findIndex(v=>/^(payment)?channels?$/.test(norm(v)));
+  const totalIndex=channelStart>=0?upper.findIndex((v,i)=>i>channelStart&&/^(grand)?total/.test(norm(v))):-1;
+  const channelIndexes=channelStart>=0&&totalIndex>channelStart?Array.from({length:totalIndex-channelStart-1},(_,i)=>channelStart+i+1):[];
   for(let i=0;i<width;i++) {
     const top=clean(upper?.[i]);const bottom=clean(lower?.[i]);
+    if(channelIndexes.includes(i)){headers[i]=top||bottom;continue;}
     if(!top){headers[i]=bottom;continue;}if(!bottom){headers[i]=top;continue;}
     const topRole=headerRole(top,overrides);const bottomRole=headerRole(bottom,overrides);
     if(bottomRole!=='other'&&bottomRole!=='extra'){headers[i]=bottom;continue;}
@@ -67,18 +75,18 @@ function stackHeaderRows(upper, lower, overrides = {}) {
     if(bottomRole==='extra'&&norm(top)==='total'){headers[i]=bottom;continue;}
     headers[i]=topRole!=='other'?top:`${top} ${bottom}`;
   }
-  return headers;
+  return {headers,channelIndexes};
 }
 export function detectTable(sheets, kind, overrides = {}) {
   const candidates = [], diagnostics = [], seen = new Set();
-  const consider=(s,h,heads,preambleEnd,stacked=false)=>{
+  const consider=(s,h,heads,preambleEnd,stacked=false,channelIndexes=[])=>{
     const roles = heads.map(v => headerRole(v, overrides));
     if (!roles.includes('code')) return;
     const isZone = roles.includes('leader') && roles.includes('zonal') && (roles.includes('format') || roles.includes('division') || roles.includes('district') || roles.includes('location'));
     if (kind === 'zone' && !isZone) return;
     if (kind === 'credit' && !roles.includes('extra') && !roles.includes('bank')) return;
     if (kind === 'credit' && isZone && !roles.includes('extra')) return;
-    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
+    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides, channelIndexes);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
     const signature=`${s.name}\u0000${h}\u0000${cols.map(c=>`${c.index}:${c.role}:${norm(c.key)}`).join('|')}`;
     if(seen.has(signature))return;seen.add(signature);
     const score = (kind === 'credit' ? (roles.includes('extra') ? 100 : 0) + cols.filter(c=>c.role==='bank').length * 4 : roles.filter(r=>r!=='other').length) + Math.min(s.grid.length / 10000, .9);
@@ -86,7 +94,7 @@ export function detectTable(sheets, kind, overrides = {}) {
   };
   for (const s of sheets) for (let h = 0; h < Math.min(s.grid.length, 40); h++) {
     const heads=s.grid[h]||[];consider(s,h,heads,h,false);
-    if(h>0&&heads.some(v=>headerRole(v,overrides)==='code'))consider(s,h,stackHeaderRows(s.grid[h-1]||[],heads,overrides),h-1,true);
+    if(h>0&&heads.some(v=>headerRole(v,overrides)==='code')){const stacked=stackHeaderRows(s.grid[h-1]||[],heads,overrides);consider(s,h,stacked.headers,h-1,true,stacked.channelIndexes);}
   }
   candidates.sort((a,b)=>b.score-a.score);
   if (!candidates.length) throw new Error((kind === 'zone' ? 'No Zone Distribution table found. Required: outlet CODE, Leader, Zonal and a location or format column.' : 'No credit card table found. Required: Outlet Code and Extra Amount or payment-channel columns. Use Column rules for renamed headings.') + (diagnostics.length?' '+diagnostics[0]:''));
