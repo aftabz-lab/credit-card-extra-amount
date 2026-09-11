@@ -76,14 +76,24 @@ export function detectTable(sheets, kind, overrides = {}) {
 }
 function get(table, row, role) { const c=table.columns.find(c=>c.role===role); return c ? row[c.index] ?? '' : ''; }
 function hash(s) { let n=2166136261; for(const c of s) n=Math.imul(n^c.charCodeAt(0),16777619); return (n>>>0).toString(36); }
+export function monthEndProjection(extra, meta = {}) {
+  const amount=number(extra);const tillDays=number(meta.tillDays??meta.elapsedDays);const monthDays=number(meta.monthDays);
+  return amount!==null&&tillDays>0&&monthDays>0?amount/tillDays*monthDays:null;
+}
 function metadata(table, source) {
   let period=''; const text=table.preamble.flat().filter(v=>typeof v==='string').join(' ');
   const m=text.match(/From\s*(\d{1,2})\s*to\s*(\d{1,2})\s*([A-Za-z]+)[_\s,-]*(20\d{2})/i);
-  let elapsedDays=null, monthDays=null;
-  if(m) { const month=new Date(`${m[3]} 1, ${m[4]}`).getMonth(); if(Number.isFinite(month)) {elapsedDays=+m[2]-+m[1]+1;monthDays=new Date(+m[4],month+1,0).getDate();period=`${m[1]}–${m[2]} ${m[3]} ${m[4]}`;} }
+  let elapsedDays=null, tillDays=null, monthDays=null;
+  if(m) {
+    const month=new Date(`${m[3]} 1, ${m[4]}`).getMonth();const fromDay=+m[1];const toDay=+m[2];
+    if(Number.isFinite(month)) {
+      const daysInMonth=new Date(+m[4],month+1,0).getDate();
+      if(fromDay>=1&&toDay>=fromDay&&toDay<=daysInMonth){tillDays=toDay;elapsedDays=toDay;monthDays=daysInMonth;period=`${m[1]}–${m[2]} ${m[3]} ${m[4]}`;}
+    }
+  }
   let targetTotal=null; const tc=table.columns.find(c=>c.role==='target');
   if(tc) for(const row of table.preamble) {const n=number(row[tc.index]);if(n!==null&&n>1)targetTotal=n;}
-  return {...source,sheetName:table.sheetName,headerRow:table.headerRow,period,elapsedDays,monthDays,targetTotal};
+  return {...source,sheetName:table.sheetName,headerRow:table.headerRow,period,elapsedDays,tillDays,monthDays,targetTotal};
 }
 export function parseCredit(sheets, source = {}, overrides = {}) {
   const t=detectTable(sheets,'credit',overrides); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
@@ -101,20 +111,20 @@ export function parseCredit(sheets, source = {}, overrides = {}) {
     if(reported!==null&&computed!==null&&Math.abs(reported-computed)>.011)totalMismatch++;
     if(extra===null) {warnings.push(`Row ${t.headerRow+i+1}: Extra Amount is unavailable.`);}
     const id=code?codeKey(code):`BLANK-${hash(JSON.stringify([name,raw]))}-${i}`;
-    // Month End Projection is always Total Extra Amount ÷ elapsed days in the
-    // period × total days in the month, computed here rather than trusted
+    // Month End Projection is always Total Extra Amount ÷ till-day count in
+    // the month × total days in that month, computed here rather than trusted
     // from any saved Projection column in the source file, so the rule stays
     // consistent across every workbook regardless of what it has saved.
-    let projection=null;
-    if(extra!==null&&meta.elapsedDays&&meta.monthDays){projection=extra/meta.elapsedDays*meta.monthDays;projectedFromRule++;}
+    const projection=monthEndProjection(extra,meta);
+    if(projection!==null)projectedFromRule++;
     else projectionUnavailable++;
     records.push({id,code:codeKey(code),name,sourceLeader:clean(get(t,row,'leader')),sourceZonal:clean(get(t,row,'zonal')),extra,projection,target:number(get(t,row,'target')),saving:number(get(t,row,'saving')),incentive:number(get(t,row,'incentive')),sales:number(get(t,row,'sales')),bankValues:values,raw,sourceRow:t.headerRow+i+1});
   }
   if(!records.length)throw new Error('The credit card table has no outlet data. The previous snapshot has been kept.');
   if(invalidNumbers)warnings.push(`${invalidNumbers} payment-channel cells contain non-numeric values. Blank cells are not assumed to be confirmed zero.`);
   if(totalMismatch)warnings.push(`${totalMismatch} rows have a reported Extra Amount different from their channel sum. Reported totals are used; review changed formulas or column rules.`);
-  if(projectedFromRule)warnings.push(`Month End Projection for ${projectedFromRule} row${projectedFromRule===1?'':'s'} is calculated as Extra Amount ÷ ${meta.elapsedDays} elapsed days × ${meta.monthDays} days in the month. Any saved Projection value in the source file is not used.`);
-  if(projectionUnavailable)warnings.push(`Month End Projection is unavailable for ${projectionUnavailable} row${projectionUnavailable===1?'':'s'} because the reporting period (elapsed days / days in month) could not be read from the file.`);
+  if(projectedFromRule)warnings.push(`Month End Projection for ${projectedFromRule} row${projectedFromRule===1?'':'s'} is calculated as Total Extra Amount ÷ ${meta.tillDays??meta.elapsedDays} till days × ${meta.monthDays} total days in the month. Any saved Projection value in the source file is not used.`);
+  if(projectionUnavailable)warnings.push(`Month End Projection is unavailable for ${projectionUnavailable} row${projectionUnavailable===1?'':'s'} because the till-day count or total days in the month could not be read from the file.`);
   const counts=new Map();records.forEach(r=>{if(r.code)counts.set(r.code,(counts.get(r.code)||0)+1);});
   const dup=[...counts].filter(([,v])=>v>1);if(dup.length)warnings.push(`${dup.length} repeated outlet codes: all source rows are included, not silently removed.`);
   return {records,banks,columns:t.columns,meta,preamble:t.preamble,warnings,duplicateCodes:dup.map(([k])=>k)};
@@ -143,7 +153,7 @@ export function joinRows(credit,zone,overrides={}) {
     const zonal=clean(manual.zonal)||z?.zonal||(!zone?r.sourceZonal:'')||'Unassigned';
     if(manual.leader&&manual.zonal)mapping='manual';
     const blankCode=!r.code;
-    return {...r,uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,excluded:blankCode?manual.excluded!==false:Boolean(manual.excluded),manual};
+    return {...r,projection:monthEndProjection(r.extra,credit.meta),uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,excluded:blankCode?manual.excluded!==false:Boolean(manual.excluded),manual};
   });
 }
 export function metric(row,key,selectedBanks=[]) {
