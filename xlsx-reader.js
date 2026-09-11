@@ -40,11 +40,12 @@ export async function readWorkbook(file) {
   for(const sheet of elements(xml(wb),'sheet')){
     const target=relmap.get(sheet.getAttribute('r:id')||sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id'));if(!target)continue;
     const path=target.startsWith('/')?target.slice(1):'xl/'+target;const text=await read(path);if(!text)continue;const doc=xml(text);const grid=[];
+    let nextRowIndex=0;
     for(const row of elements(doc,'row')){
-      const rowIndex=Number(row.getAttribute('r'))-1;if(rowIndex>200000)throw new Error('Workbook has too many formatted rows. Remove unused rows and save again.');
-      const line=[];
+      const explicitRow=Number(row.getAttribute('r'));const rowIndex=Number.isInteger(explicitRow)&&explicitRow>0?explicitRow-1:nextRowIndex;nextRowIndex=rowIndex+1;if(rowIndex>200000)throw new Error('Workbook has too many formatted rows. Remove unused rows and save again.');
+      const line=[];let nextColumnIndex=0;
       for(const cell of elements(row,'c')){
-        const i=col(cell.getAttribute('r'));if(i<0||i>500)continue;const type=cell.getAttribute('t');let val=elements(cell,'v')[0]?.textContent??'';
+        const reference=cell.getAttribute('r')||'';const i=reference?col(reference):nextColumnIndex;nextColumnIndex=i+1;if(i<0||i>500)continue;const type=cell.getAttribute('t');let val=elements(cell,'v')[0]?.textContent??'';
         if(type==='s')val=strings[Number(val)]??'';else if(type==='inlineStr')val=elements(cell,'t').map(t=>t.textContent).join('');else if(!type&&val!=='')val=Number(val);else if(type==='b')val=val==='1';
         line[i]=val;
       }

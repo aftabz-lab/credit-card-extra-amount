@@ -18,7 +18,7 @@ const ALIASES = {
   leader: ['leader','RHO','regional head','regional head name','region head','regional manager'],
   zonal: ['zonal','zone head','zonal name','zonal manager','zone manager','zonal in charge'],
   sales: ['POS & MFS Sales','POS MFS Sales','card sales','credit card sales','payment sales','POS sales'],
-  extra: ['extra amount','total extra amount','credit card extra amount','total credit card extra amount','excess charge','extra charge','total extra charge','additional charge'],
+  extra: ['extra amount','total extra amount','credit card extra amount','total credit card extra amount','excess charge','extra charge','total extra charge','additional charge','total opportunity loss','opportunity loss'],
   projection: ['month end projection','month end projected amount','projected amount','projection','monthly projection'],
   target: ['target','target amount','saving target','savings target'],
   saving: ['save amount','saving amount','savings amount','saving','savings'],
@@ -56,18 +56,37 @@ export function inferColumns(headers, lines, overrides = {}) {
   for (const c of cols) { if (used.has(c.key)) throw new Error(`Duplicate column heading: ${c.key}. Give each column a distinct name.`); used.add(c.key); }
   return cols;
 }
+function stackHeaderRows(upper, lower, overrides = {}) {
+  const width=Math.max(upper?.length||0,lower?.length||0);const headers=[];
+  for(let i=0;i<width;i++) {
+    const top=clean(upper?.[i]);const bottom=clean(lower?.[i]);
+    if(!top){headers[i]=bottom;continue;}if(!bottom){headers[i]=top;continue;}
+    const topRole=headerRole(top,overrides);const bottomRole=headerRole(bottom,overrides);
+    if(bottomRole!=='other'&&bottomRole!=='extra'){headers[i]=bottom;continue;}
+    if(topRole==='bank'){headers[i]=top;continue;}
+    if(bottomRole==='extra'&&norm(top)==='total'){headers[i]=bottom;continue;}
+    headers[i]=topRole!=='other'?top:`${top} ${bottom}`;
+  }
+  return headers;
+}
 export function detectTable(sheets, kind, overrides = {}) {
-  const candidates = [], diagnostics = [];
-  for (const s of sheets) for (let h = 0; h < Math.min(s.grid.length, 40); h++) {
-    const heads = s.grid[h] || []; const roles = heads.map(v => headerRole(v, overrides));
-    if (!roles.includes('code')) continue;
+  const candidates = [], diagnostics = [], seen = new Set();
+  const consider=(s,h,heads,preambleEnd,stacked=false)=>{
+    const roles = heads.map(v => headerRole(v, overrides));
+    if (!roles.includes('code')) return;
     const isZone = roles.includes('leader') && roles.includes('zonal') && (roles.includes('format') || roles.includes('division') || roles.includes('district') || roles.includes('location'));
-    if (kind === 'zone' && !isZone) continue;
-    if (kind === 'credit' && !roles.includes('extra') && !roles.includes('bank')) continue;
-    if (kind === 'credit' && isZone && !roles.includes('extra')) continue;
-    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);continue;}
+    if (kind === 'zone' && !isZone) return;
+    if (kind === 'credit' && !roles.includes('extra') && !roles.includes('bank')) return;
+    if (kind === 'credit' && isZone && !roles.includes('extra')) return;
+    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
+    const signature=`${s.name}\u0000${h}\u0000${cols.map(c=>`${c.index}:${c.role}:${norm(c.key)}`).join('|')}`;
+    if(seen.has(signature))return;seen.add(signature);
     const score = (kind === 'credit' ? (roles.includes('extra') ? 100 : 0) + cols.filter(c=>c.role==='bank').length * 4 : roles.filter(r=>r!=='other').length) + Math.min(s.grid.length / 10000, .9);
-    candidates.push({ sheetName:s.name, headerRow:h+1, headers:heads, columns:cols, lines:s.grid.slice(h+1), preamble:s.grid.slice(0,h), score });
+    candidates.push({ sheetName:s.name, headerRow:h+1, headers:heads, columns:cols, lines:s.grid.slice(h+1), preamble:s.grid.slice(0,preambleEnd), score, stacked });
+  };
+  for (const s of sheets) for (let h = 0; h < Math.min(s.grid.length, 40); h++) {
+    const heads=s.grid[h]||[];consider(s,h,heads,h,false);
+    if(h>0&&heads.some(v=>headerRole(v,overrides)==='code'))consider(s,h,stackHeaderRows(s.grid[h-1]||[],heads,overrides),h-1,true);
   }
   candidates.sort((a,b)=>b.score-a.score);
   if (!candidates.length) throw new Error((kind === 'zone' ? 'No Zone Distribution table found. Required: outlet CODE, Leader, Zonal and a location or format column.' : 'No credit card table found. Required: Outlet Code and Extra Amount or payment-channel columns. Use Column rules for renamed headings.') + (diagnostics.length?' '+diagnostics[0]:''));
@@ -80,8 +99,19 @@ export function monthEndProjection(extra, meta = {}) {
   const amount=number(extra);const tillDays=number(meta.tillDays??meta.elapsedDays);const monthDays=number(meta.monthDays);
   return amount!==null&&tillDays>0&&monthDays>0?amount/tillDays*monthDays:null;
 }
+const MONTH_LABELS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function modifiedPeriod(value) {
+  const date=new Date(value);if(!Number.isFinite(date.getTime()))return null;
+  let day,month,year;
+  try {
+    const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Dhaka',day:'numeric',month:'numeric',year:'numeric'}).formatToParts(date).map(p=>[p.type,p.value]));
+    day=+parts.day;month=+parts.month;year=+parts.year;
+  } catch {day=date.getUTCDate();month=date.getUTCMonth()+1;year=date.getUTCFullYear();}
+  const monthDays=new Date(Date.UTC(year,month,0)).getUTCDate();
+  return day>=1&&day<=monthDays?{day,monthDays,period:`1–${day} ${MONTH_LABELS[month-1]} ${year}`} : null;
+}
 function metadata(table, source) {
-  let period=''; const text=table.preamble.flat().filter(v=>typeof v==='string').join(' ');
+  let period=''; const text=[...table.preamble,...table.lines.slice(-10)].flat().filter(v=>typeof v==='string').join(' ').replace(/\s+/g,' ');
   const m=text.match(/From\s*(\d{1,2})\s*to\s*(\d{1,2})\s*([A-Za-z]+)[_\s,-]*(20\d{2})/i);
   let elapsedDays=null, tillDays=null, monthDays=null;
   if(m) {
@@ -90,6 +120,21 @@ function metadata(table, source) {
       const daysInMonth=new Date(+m[4],month+1,0).getDate();
       if(fromDay>=1&&toDay>=fromDay&&toDay<=daysInMonth){tillDays=toDay;elapsedDays=toDay;monthDays=daysInMonth;period=`${m[1]}–${m[2]} ${m[3]} ${m[4]}`;}
     }
+  }
+  if(!period) {
+    const f=text.match(/Transaction\s+Date\s+is\s+on\s+or\s+after\s+(?:[A-Za-z]+,\s*)?([A-Za-z]+)\s+(\d{1,2}),\s*(20\d{2})\s+and\s+is\s+before\s+(?:[A-Za-z]+,\s*)?([A-Za-z]+)\s+(\d{1,2}),\s*(20\d{2})/i);
+    if(f) {
+      const startMonth=MONTH_LABELS.findIndex(v=>f[1].toLowerCase().startsWith(v.toLowerCase()));
+      const endMonth=MONTH_LABELS.findIndex(v=>f[4].toLowerCase().startsWith(v.toLowerCase()));
+      if(startMonth>=0&&endMonth>=0) {
+        const start=new Date(Date.UTC(+f[3],startMonth,+f[2]));const endExclusive=new Date(Date.UTC(+f[6],endMonth,+f[5]));const end=new Date(endExclusive.getTime()-86400000);
+        if(end>=start){tillDays=end.getUTCDate();elapsedDays=tillDays;monthDays=new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate();period=start.getUTCMonth()===end.getUTCMonth()&&start.getUTCFullYear()===end.getUTCFullYear()?`${start.getUTCDate()}–${end.getUTCDate()} ${MONTH_LABELS[end.getUTCMonth()]} ${end.getUTCFullYear()}`:`${start.getUTCDate()} ${MONTH_LABELS[start.getUTCMonth()]}–${end.getUTCDate()} ${MONTH_LABELS[end.getUTCMonth()]} ${end.getUTCFullYear()}`;}
+      }
+    }
+  }
+  if(!period) {
+    const inferred=modifiedPeriod(source.modifiedTime);
+    if(inferred){tillDays=inferred.day;elapsedDays=inferred.day;monthDays=inferred.monthDays;period=inferred.period;}
   }
   let targetTotal=null; const tc=table.columns.find(c=>c.role==='target');
   if(tc) for(const row of table.preamble) {const n=number(row[tc.index]);if(n!==null&&n>1)targetTotal=n;}
@@ -102,7 +147,8 @@ export function parseCredit(sheets, source = {}, overrides = {}) {
   for(let i=0;i<t.lines.length;i++) {
     const row=t.lines[i]||[]; const raw=Object.fromEntries(t.columns.map(c=>[c.key,row[c.index]??'']));
     const code=clean(get(t,row,'code')); const name=clean(get(t,row,'name')); const serial=clean(get(t,row,'serial'));
-    if (/^(grand\s*total|total|sub\s*total)$/i.test(code||name||serial) || /^outlet\s*code$/i.test(code)) continue;
+    if (/^(grand\s*total|total|sub\s*total)$/i.test(code||name||serial) || /^outlet\s*code$/i.test(code) || /^applied\s*filters?:/i.test(code||name||serial)) continue;
+    if(t.stacked&&i===0&&!code&&!name&&!serial)continue;
     const numericCols=t.columns.filter(c=>['bank','extra','sales','projection','target','saving','incentive'].includes(c.role));
     if(!code&&!name&&!numericCols.some(c=>number(row[c.index])!==null&&number(row[c.index])!==0)) continue;
     const values={};for(const b of banks) { const v=raw[b.key]; values[b.key]=number(v); if(clean(v)&&number(v)===null)invalidNumbers++; }
