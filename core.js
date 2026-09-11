@@ -202,12 +202,19 @@ export function joinRows(credit,zone,overrides={}) {
   return credit.records.map((r,idx)=>{
     const matches=index.get(r.code)||[];const distinct=[...new Set(matches.map(m=>JSON.stringify(m)))];
     const z=distinct.length===1?matches[0]:null;const manual=overrides[r.id]||{};
-    let mapping=!zone?'unverified':matches.length===0?'unmatched':distinct.length>1?'conflict':(!z.leader||!z.zonal)?'incomplete':'matched';
-    const leader=clean(manual.leader)||z?.leader||(!zone?r.sourceLeader:'')||'Unassigned';
-    const zonal=clean(manual.zonal)||z?.zonal||(!zone?r.sourceZonal:'')||'Unassigned';
-    if(manual.leader&&manual.zonal)mapping='manual';
     const blankCode=!r.code;
-    return {...r,projection:monthEndProjection(r.extra,credit.meta),uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,excluded:blankCode?manual.excluded!==false:Boolean(manual.excluded),manual};
+    const manualLeader=clean(manual.leader),manualZonal=clean(manual.zonal);
+    const resolvedLeader=manualLeader||clean(z?.leader),resolvedZonal=manualZonal||clean(z?.zonal);
+    const manualComplete=Boolean(!blankCode&&manualLeader&&manualZonal);
+    const codeMatchComplete=Boolean(!blankCode&&z&&resolvedLeader&&resolvedZonal);
+    const mappingEligible=manualComplete||codeMatchComplete;
+    const hasManualMapping=Boolean(manualLeader||manualZonal);
+    let mapping=!zone?'unverified':matches.length===0?'unmatched':distinct.length>1?'conflict':(!resolvedLeader||!resolvedZonal)?'incomplete':'matched';
+    if(mappingEligible&&hasManualMapping)mapping='manual';
+    const leader=resolvedLeader||(!zone?clean(r.sourceLeader):'')||'Unassigned';
+    const zonal=resolvedZonal||(!zone?clean(r.sourceZonal):'')||'Unassigned';
+    const autoExcluded=!mappingEligible,manualExcluded=manual.excluded===true;
+    return {...r,projection:monthEndProjection(r.extra,credit.meta),uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,mappingEligible,autoExcluded,manualExcluded,excluded:autoExcluded||manualExcluded,manual};
   });
 }
 export function metric(row,key,selectedBanks=[]) {
