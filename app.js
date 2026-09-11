@@ -1,6 +1,6 @@
 import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260911-6';
 import * as Sync from './sync.js?v=20260911-5';
-import {createManagementWorkbook} from './management-xlsx.js?v=20260911-3';
+import {createManagementWorkbook} from './management-xlsx.js?v=20260911-4';
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const colors=['#33bdb8','#607cf0','#edaa4b','#d66ab7','#64a5db','#91bf65','#ee6570','#9383d5','#48a881','#b28c61'];
@@ -38,6 +38,13 @@ function renderTable(rows,cols,{sortable=false,total=true}={}){
 }
 function sumColumn(rows,c){if(state.banks.length&&['projection','target','saving','incentive'].includes(c.key))return '—';if(c.key.startsWith('raw:'))return '';const vals=rows.map(r=>number(metric(r,c.key,state.banks))).filter(v=>v!==null);return vals.length?money(vals.reduce((s,v)=>s+v,0),'bdt',false):'—';}
 function refreshRows(){if(!state.payload)return;state.rows=joinRows(state.payload.credit,state.payload.zone,state.payload.overrides);state.filtered=filterRows(state.rows,state.filters,state.search,state.banks);}
+function renderSearchSuggestions(){
+  const suggestions=new Map();
+  const add=(value,type)=>{const text=clean(value);if(!text||text==='Unassigned'||text==='Unspecified')return;const key=text.toLocaleLowerCase();if(!suggestions.has(key))suggestions.set(key,{value:text,types:new Set()});suggestions.get(key).types.add(type);};
+  for(const row of state.rows.filter(r=>!r.excluded)){add(row.code,'Outlet code');add(row.name,'Outlet name');add(row.leader,'RHO / Leader');add(row.zonal,'Zonal');add(row.format,'Format');add(row.division,'Division');add(row.district,'District');add(row.location,'Location type');}
+  const html=[...suggestions.values()].sort((a,b)=>a.value.localeCompare(b.value,undefined,{numeric:true,sensitivity:'base'})).map(item=>`<option value="${esc(item.value)}" label="${esc([...item.types].join(' · '))}"></option>`).join('');
+  if($('search-suggestions').innerHTML!==html)$('search-suggestions').innerHTML=html;
+}
 const filterSpecs=[['leader','RHO / Leader'],['zonal','Zonal'],['format','Format'],['district','District'],['division','Division'],['location','Location type'],['bank','Payment channel'],['mapping','Mapping']];
 function filterList(k){
   if(k==='bank')return state.payload.credit.banks.map(b=>({value:b.key,label:b.label,count:state.rows.filter(r=>!r.excluded&&(r.bankValues[b.key]??0)!==0).length}));
@@ -114,7 +121,7 @@ function renderConnection(){
   const s=Sync.getPublisherSession();$('publisher-state').textContent=s?`Publisher: ${s.user?.email||'signed in'}. ${state.dirty?'Draft changes need publication.':'Ready to publish changed data.'}`:'Viewer mode. Sign in with the existing snapshot publisher account to share changes.';
   const canAuto=Boolean(s&&d.authorized);$('auto-snapshot').disabled=!canAuto;$('publish').disabled=state.busy;$('read-drive').disabled=state.busy;
 }
-function render(){if(!state.payload)return;refreshRows();for(const c of columns()){if(c.key.startsWith('raw:')&&!state.knownColumns.has(c.key))state.visible?.add(c.key);state.knownColumns.add(c.key);}$('period').textContent=state.payload.credit.meta.period||'Reporting period not provided';$('snapshot-time').textContent=time(snapshotTime(state.payload));$('source-badge').textContent=state.dirty?'Local draft · not published':state.payload.sourceKind==='reference'?'Supplied workbook':state.cloudError?'Cached snapshot':'Published snapshot';const issues=state.rows.filter(r=>r.autoExcluded).length;const eligible=state.rows.filter(r=>!r.excluded).length;$('mapping-count').textContent=count(issues);
+function render(){if(!state.payload)return;refreshRows();renderSearchSuggestions();for(const c of columns()){if(c.key.startsWith('raw:')&&!state.knownColumns.has(c.key))state.visible?.add(c.key);state.knownColumns.add(c.key);}$('period').textContent=state.payload.credit.meta.period||'Reporting period not provided';$('snapshot-time').textContent=time(snapshotTime(state.payload));$('source-badge').textContent=state.dirty?'Local draft · not published':state.payload.sourceKind==='reference'?'Supplied workbook':state.cloudError?'Cached snapshot':'Published snapshot';const issues=state.rows.filter(r=>r.autoExcluded).length;const eligible=state.rows.filter(r=>!r.excluded).length;$('mapping-count').textContent=count(issues);
   let note='';if(!state.payload.zone)note='Current Zone Distribution has not been loaded. Rows without complete manual RHO and Zonal mappings are omitted from all figures and downloads.';else if(state.dirty)note=`You are viewing a local draft. Publish the snapshot to share the source, mappings and exclusions with other viewers.${issues?` ${count(issues)} unresolved rows remain omitted.`:''}`;else if(state.cloudError)note='The cloud snapshot is unavailable. Showing the last valid data; its snapshot time is shown above.';else if(issues)note=`${count(issues)} source rows need mapping attention and are omitted from every calculation, table, chart and download until both RHO and Zonal are resolved.`;banner(note);
   renderFilters();renderOverview();renderOutlets();renderMapping();if(state.tab==='data')renderData();$('footer-status').textContent=`Credit Card · ${count(eligible)} eligible source rows`;
 }
