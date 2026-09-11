@@ -133,9 +133,11 @@ function download(name,content,type='text/csv;charset=utf-8'){const blob=content
 function managementScope(){const parts=[];if(state.search.trim())parts.push(`Search: ${state.search.trim()}`);for(const [key,label] of filterSpecs){if(key==='bank')continue;const values=state.filters[key]||[];if(values.length)parts.push(`${label}: ${values.join(', ')}`);}if(state.banks.length){const names=state.banks.map(key=>state.payload.credit.banks.find(b=>b.key===key)?.label||key);parts.push(`Payment channel: ${names.join(', ')}`);}return parts.length?parts.join(' · '):'All active outlets';}
 function exportManagement(){
   const {gs}=leaderSummary();const view=totals(state.filtered,state.banks);const totalExtra=view.extra??0;
+  const byProjectionDesc=(a,b)=>(b.projection??-Infinity)-(a.projection??-Infinity)||a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'});
+  const leaders=[...gs].sort(byProjectionDesc);
   const values=group=>({outlets:group.outlets,extra:group.extra,projection:group.projection,share:totalExtra?(group.extra??0)/totalExtra:0});
-  const rows=gs.flatMap(leader=>{const zonals=groups(leader.rows,'zonal',state.banks).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'}));return [...zonals.map(zonal=>({kind:'zonal',leader:leader.name,zonal:zonal.name,...values(zonal)})),{kind:'leader-total',leader:leader.name,zonal:'RHO TOTAL',...values(leader)}];});
-  const chartRows=gs.map(leader=>({leader:leader.name,extra:leader.extra}));
+  const rows=leaders.flatMap(leader=>{const zonals=groups(leader.rows,'zonal',state.banks).sort(byProjectionDesc);return [...zonals.map(zonal=>({kind:'zonal',leader:leader.name,zonal:zonal.name,...values(zonal)})),{kind:'leader-total',leader:leader.name,zonal:'RHO TOTAL',...values(leader)}];});
+  const chartRows=leaders.map(leader=>({leader:leader.name,extra:leader.extra}));
   const workbook=createManagementWorkbook({period:state.payload.credit.meta.period,scope:managementScope(),generatedAt:new Date(),generatedLabel:time(new Date().toISOString()),rows,chartRows,totals:{outlets:view.outlets,extra:view.extra,projection:view.projection,share:totalExtra?1:0}});
   download('Credit-Card-Management-Leader-Wise.xlsx',workbook);toast('Leader-Wise management workbook downloaded.');
 }

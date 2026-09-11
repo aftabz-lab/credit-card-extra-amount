@@ -11,3 +11,11 @@
 /* Dense financial data remains readable in both themes. */
 .filter-label,.kpi-label,.bar-name,.bar-value,.channel-row{font-size:14px}.table-wrap table{font-size:14px}.table-wrap th{font-size:12px}.kpi-foot,.legend,.chart-controls,.source-badge,.source-detail small,.validation-note{font-size:12px}.filter-group{min-width:0}.brand small{font-size:10px}.source-detail{font-size:14px}.table-wrap td{padding-top:12px;padding-bottom:12px}.mapping-table-input{font-size:14px}.table-wrap .outlet-cell b{font-size:14px}.table-wrap .outlet-cell small{font-size:12px}
 @media(max-width:540px){.bar-name,.bar-value{font-size:12px}.kpi-label{font-size:13px}.kpi-value{font-size:23px}.kpi-foot{font-size:11px}.filter-label{font-size:13px}}
+
+/* Requested filter and export emphasis. */
+.search-box{min-height:39px;padding:0 10px;background:var(--input);border:1px solid var(--border);border-radius:7px}
+.search-box input{padding:8px 0}
+.search-box input:focus{outline:0}
+.search-box:focus-within{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal)}
+#export{background:#087e62;border-color:#087e62;color:#fff}
+#export:hover{background:#06684f;border-color:#06684f}
