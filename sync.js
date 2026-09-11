@@ -1,5 +1,5 @@
-import {readWorkbook} from './xlsx-reader.js?v=20260911-4';
-import {parseCredit,parseZone,zoneFromSnapshot} from './core.js?v=20260911-4';
+import {readWorkbook} from './xlsx-reader.js?v=20260911-5';
+import {parseCredit,parseZone,zoneFromSnapshot} from './core.js?v=20260911-5';
 import {readCloudSnapshot,publishCloudSnapshotIfUnchanged,getPublisherSession,signInPublisher,signOutPublisher} from './supabase-sync.js';
 export {getPublisherSession,signInPublisher,signOutPublisher};
 export const FOLDER_ID='16HTr8nfPz4P2PMr4QB0bjgwiD110Qd-0';
