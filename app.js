@@ -1,6 +1,6 @@
 import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260911-6';
 import * as Sync from './sync.js?v=20260911-5';
-import {createManagementWorkbook} from './management-xlsx.js?v=20260911-4';
+import {createManagementWorkbook} from './management-xlsx.js?v=20260914-1';
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const colors=['#33bdb8','#607cf0','#edaa4b','#d66ab7','#64a5db','#91bf65','#ee6570','#9383d5','#48a881','#b28c61'];
@@ -132,13 +132,14 @@ async function applyPublished(p){state.payload=p;state.dirty=false;state.baseClo
 function download(name,content,type='text/csv;charset=utf-8'){const blob=content instanceof Blob?content:new Blob([content],{type});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function managementScope(){const parts=[];if(state.search.trim())parts.push(`Search: ${state.search.trim()}`);for(const [key,label] of filterSpecs){if(key==='bank')continue;const values=state.filters[key]||[];if(values.length)parts.push(`${label}: ${values.join(', ')}`);}if(state.banks.length){const names=state.banks.map(key=>state.payload.credit.banks.find(b=>b.key===key)?.label||key);parts.push(`Payment channel: ${names.join(', ')}`);}return parts.length?parts.join(' · '):'All active outlets';}
 function exportManagement(){
-  const {gs}=leaderSummary();const view=totals(state.filtered,state.banks);const totalExtra=view.extra??0;
+  const {banks,gs}=leaderSummary();const view=totals(state.filtered,state.banks);const totalExtra=view.extra??0;
   const byProjectionDesc=(a,b)=>(b.projection??-Infinity)-(a.projection??-Infinity)||a.name.localeCompare(b.name,undefined,{numeric:true,sensitivity:'base'});
   const leaders=[...gs].sort(byProjectionDesc);
-  const values=group=>({outlets:group.outlets,extra:group.extra,projection:group.projection,share:totalExtra?(group.extra??0)/totalExtra:0});
+  const bankValues=rows=>Object.fromEntries(banks.map(bank=>[bank.key,rows.reduce((sum,row)=>sum+(row.bankValues[bank.key]??0),0)]));
+  const values=group=>({outlets:group.outlets,bankValues:bankValues(group.rows),extra:group.extra,projection:group.projection,share:totalExtra?(group.extra??0)/totalExtra:0});
   const rows=leaders.flatMap(leader=>{const zonals=groups(leader.rows,'zonal',state.banks).sort(byProjectionDesc);return [...zonals.map(zonal=>({kind:'zonal',leader:leader.name,zonal:zonal.name,...values(zonal)})),{kind:'leader-total',leader:leader.name,zonal:'RHO TOTAL',...values(leader)}];});
   const chartRows=leaders.map(leader=>({leader:leader.name,extra:leader.extra}));
-  const workbook=createManagementWorkbook({period:state.payload.credit.meta.period,scope:managementScope(),generatedAt:new Date(),generatedLabel:time(new Date().toISOString()),rows,chartRows,totals:{outlets:view.outlets,extra:view.extra,projection:view.projection,share:totalExtra?1:0}});
+  const workbook=createManagementWorkbook({period:state.payload.credit.meta.period,scope:managementScope(),generatedAt:new Date(),generatedLabel:time(new Date().toISOString()),banks,rows,chartRows,totals:{outlets:view.outlets,bankValues:bankValues(state.filtered),extra:view.extra,projection:view.projection,share:totalExtra?1:0}});
   download('Credit-Card-Management-Leader-Wise.xlsx',workbook);toast('Leader-Wise management workbook downloaded.');
 }
 async function doRefresh({force=false}={}){

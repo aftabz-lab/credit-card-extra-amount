@@ -80,8 +80,11 @@ const workbookRels=XML_HEADER+'<Relationships xmlns="http://schemas.openxmlforma
 const stylesXml=XML_HEADER+`<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]-#,##0.00;–"/><numFmt numFmtId="165" formatCode="0.0%"/></numFmts><fonts count="5"><font><sz val="10"/><color rgb="FF142235"/><name val="Arial"/><family val="2"/></font><font><b/><sz val="18"/><color rgb="FF142235"/><name val="Arial"/><family val="2"/></font><font><i/><sz val="10"/><color rgb="FF586C83"/><name val="Arial"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Arial"/><family val="2"/></font><font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Arial"/><family val="2"/></font></fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF142235"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFCB2639"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FFDCE3ED"/></left><right style="thin"><color rgb="FFDCE3ED"/></right><top style="thin"><color rgb="FFDCE3ED"/></top><bottom style="thin"><color rgb="FFDCE3ED"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="13"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="0" fontId="3" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="3" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="165" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="0" fontId="4" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="3" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="164" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="165" fontId="4" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>`;
 
 function worksheetXml(model,hasChart){
-  const headers=['RHO / Leader','Zonal','Outlets','Total Extra Amount','Month End Projection','Share'];
+  const banks=model.banks;
+  const bankStart=3;const extraIndex=bankStart+banks.length;const projectionIndex=extraIndex+1;const shareIndex=extraIndex+2;
+  const headers=['RHO / Leader','Zonal','Outlets',...banks.map(bank=>bank.label),'Total Extra Amount','Month End Projection','Share'];
   const lastColumn=columnName(headers.length-1);const headerRow=17;const firstDataRow=18;const totalRow=firstDataRow+model.rows.length;
+  const metadataLastColumn=hasChart?columnName(Math.min(headers.length-1,5)):lastColumn;
   const leaderMerges=[];let detailStart=null,detailLeader='';
   model.rows.forEach((row,index)=>{if(row.kind==='leader-total'){if(detailStart!==null&&index-detailStart>1)leaderMerges.push(`A${firstDataRow+detailStart}:A${firstDataRow+index-1}`);detailStart=null;detailLeader='';}else if(detailStart===null||detailLeader!==row.leader){if(detailStart!==null&&index-detailStart>1)leaderMerges.push(`A${firstDataRow+detailStart}:A${firstDataRow+index-1}`);detailStart=index;detailLeader=row.leader;}});
   if(detailStart!==null&&model.rows.length-detailStart>1)leaderMerges.push(`A${firstDataRow+detailStart}:A${firstDataRow+model.rows.length-1}`);
@@ -94,12 +97,28 @@ function worksheetXml(model,hasChart){
   ];
   model.rows.forEach((row,index)=>{
     const n=firstDataRow+index;const subtotal=row.kind==='leader-total';const textStyle=subtotal?8:4;const countStyle=subtotal?9:5;const moneyStyle=subtotal?10:6;const shareStyle=subtotal?11:7;const leaderStart=!subtotal&&(index===0||model.rows[index-1].kind==='leader-total'||model.rows[index-1].leader!==row.leader);
-    const values=[textCell(`A${n}`,subtotal||leaderStart?row.leader:'',subtotal?8:12),textCell(`B${n}`,row.zonal,textStyle),numberCell(`C${n}`,row.outlets,countStyle),numberCell(`D${n}`,row.extra,moneyStyle),numberCell(`E${n}`,row.projection,moneyStyle),numberCell(`F${n}`,row.share,shareStyle)];
+    const values=[
+      textCell(`A${n}`,subtotal||leaderStart?row.leader:'',subtotal?8:12),
+      textCell(`B${n}`,row.zonal,textStyle),
+      numberCell(`C${n}`,row.outlets,countStyle),
+      ...banks.map((bank,index)=>numberCell(`${columnName(bankStart+index)}${n}`,row.bankValues?.[bank.key],moneyStyle)),
+      numberCell(`${columnName(extraIndex)}${n}`,row.extra,moneyStyle),
+      numberCell(`${columnName(projectionIndex)}${n}`,row.projection,moneyStyle),
+      numberCell(`${columnName(shareIndex)}${n}`,row.share,shareStyle),
+    ];
     sheetRows.push(rowXml(n,values,19));
   });
-  const totalCells=[textCell(`A${totalRow}`,'VIEW TOTAL',8),textCell(`B${totalRow}`,'ALL ZONALS',8),numberCell(`C${totalRow}`,model.totals.outlets,9),numberCell(`D${totalRow}`,model.totals.extra,10),numberCell(`E${totalRow}`,model.totals.projection,10),numberCell(`F${totalRow}`,model.totals.share,11)];sheetRows.push(rowXml(totalRow,totalCells,21));
-  const widths=headers.map((header,index)=>{const width=index===0?25:index===1?24:index===2?11:index>=headers.length-3?(index===headers.length-1?12:22):Math.min(19,Math.max(12,String(header).length+3));return `<col min="${index+1}" max="${index+1}" width="${width}" customWidth="1"/>`;}).join('');
-  const mergeRefs=[`A1:${lastColumn}1`,`A2:${lastColumn}2`,`A3:${lastColumn}3`,`A4:${lastColumn}4`,...leaderMerges];const merges=`<mergeCells count="${mergeRefs.length}">${mergeRefs.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells>`;
+  const totalCells=[
+    textCell(`A${totalRow}`,'VIEW TOTAL',8),
+    textCell(`B${totalRow}`,'ALL ZONALS',8),
+    numberCell(`C${totalRow}`,model.totals.outlets,9),
+    ...banks.map((bank,index)=>numberCell(`${columnName(bankStart+index)}${totalRow}`,model.totals.bankValues?.[bank.key],10)),
+    numberCell(`${columnName(extraIndex)}${totalRow}`,model.totals.extra,10),
+    numberCell(`${columnName(projectionIndex)}${totalRow}`,model.totals.projection,10),
+    numberCell(`${columnName(shareIndex)}${totalRow}`,model.totals.share,11),
+  ];sheetRows.push(rowXml(totalRow,totalCells,21));
+  const widths=headers.map((header,index)=>{const width=index===0?25:index===1?24:index===2?11:index===extraIndex||index===projectionIndex?22:index===shareIndex?12:Math.min(19,Math.max(12,String(header).length+3));return `<col min="${index+1}" max="${index+1}" width="${width}" customWidth="1"/>`;}).join('');
+  const mergeRefs=[`A1:${metadataLastColumn}1`,`A2:${metadataLastColumn}2`,`A3:${metadataLastColumn}3`,`A4:${metadataLastColumn}4`,...leaderMerges];const merges=`<mergeCells count="${mergeRefs.length}">${mergeRefs.map(ref=>`<mergeCell ref="${ref}"/>`).join('')}</mergeCells>`;
   return XML_HEADER+`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:${lastColumn}${totalRow}"/><sheetViews><sheetView showGridLines="0" tabSelected="1" workbookViewId="0"><pane ySplit="${headerRow}" topLeftCell="A${firstDataRow}" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A${firstDataRow}" sqref="A${firstDataRow}"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>${widths}</cols><sheetData>${sheetRows.join('')}</sheetData><autoFilter ref="A${headerRow}:${lastColumn}${Math.max(headerRow,totalRow-1)}"/>${merges}<pageMargins left="0.25" right="0.25" top="0.5" bottom="0.5" header="0.2" footer="0.2"/><pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0" paperSize="9"/>${hasChart?'<drawing r:id="rId1"/>':''}</worksheet>`;
 }
 
@@ -124,7 +143,7 @@ function coreProperties(stamp){const value=(stamp instanceof Date&&!Number.isNaN
 
 export function createManagementWorkbook(model){
   const stamp=model.generatedAt instanceof Date?model.generatedAt:new Date();
-  const normalized={...model,rows:Array.isArray(model.rows)?model.rows:[],chartRows:Array.isArray(model.chartRows)?model.chartRows:[],totals:model.totals||{outlets:0,extra:0,projection:null,share:0}};
+  const normalized={...model,banks:Array.isArray(model.banks)?model.banks.filter(bank=>bank&&String(bank.key||'').trim()).map(bank=>({key:String(bank.key).trim(),label:String(bank.label||bank.key).trim()})):[],rows:Array.isArray(model.rows)?model.rows:[],chartRows:Array.isArray(model.chartRows)?model.chartRows:[],totals:model.totals||{outlets:0,bankValues:{},extra:0,projection:null,share:0}};
   const hasChart=normalized.chartRows.length>0;const files=[
     ['[Content_Types].xml',contentTypes(hasChart)],['_rels/.rels',packageRels],['docProps/app.xml',appProperties()],['docProps/core.xml',coreProperties(stamp)],['xl/workbook.xml',workbookXml],['xl/_rels/workbook.xml.rels',workbookRels],['xl/styles.xml',stylesXml],['xl/worksheets/sheet1.xml',worksheetXml(normalized,hasChart)]
   ];
