@@ -14,13 +14,14 @@
 
 import { google } from 'googleapis';
 import { readWorkbookBuffer } from './xlsx-reader.node.mjs';
-import { parseCredit, parseZone } from '../core.js';
+import { parseCredit, parseZone, isCcolOutletsSource, isIgnoredRawSource } from '../core.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wstxgbzmsbosinmhhjbl.supabase.co';
 const SUPABASE_TABLE = 'dashboard_snapshots';
 const SNAPSHOT_KEY = 'credit-card-extra-amount';
 const ZONE_SNAPSHOT_KEY = 'zone-distribution';
 const FOLDER_ID = process.env.DRIVE_FOLDER_ID || '16HTr8nfPz4P2PMr4QB0bjgwiD110Qd-0';
+const DRIVE_FOLDER_MIME = 'application/vnd.google-apps.folder';
 const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 
 function requireEnv(name) {
@@ -42,16 +43,34 @@ async function driveClient() {
 }
 
 async function listCandidateFiles(drive) {
-  const res = await drive.files.list({
-    q: `'${FOLDER_ID.replace(/'/g, "\\'")}' in parents and trashed = false`,
-    fields: 'files(id,name,mimeType,modifiedTime,size)',
-    orderBy: 'modifiedTime desc,name',
-    pageSize: 1000,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-  });
   const isCandidate = (f) => !f.name.startsWith('~$') && (/\.(xlsx|xlsm|csv|tsv)$/i.test(f.name) || f.mimeType === 'application/vnd.google-apps.spreadsheet');
-  return (res.data.files || []).filter(isCandidate);
+  const files = [];
+  const queue = [{ id: FOLDER_ID, path: '' }];
+  const seen = new Set();
+  while (queue.length) {
+    const folder = queue.shift();
+    if (seen.has(folder.id)) continue;
+    seen.add(folder.id);
+    let pageToken;
+    do {
+      const res = await drive.files.list({
+        q: `'${folder.id.replace(/'/g, "\\'")}' in parents and trashed = false`,
+        fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,size)',
+        orderBy: 'modifiedTime desc,name',
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      for (const meta of res.data.files || []) {
+        const drivePath = folder.path ? `${folder.path}/${meta.name}` : meta.name;
+        if (meta.mimeType === DRIVE_FOLDER_MIME) queue.push({ id: meta.id, path: drivePath });
+        else if (isCandidate(meta)) files.push({ ...meta, drivePath });
+      }
+      pageToken = res.data.nextPageToken || undefined;
+    } while (pageToken);
+  }
+  return files.sort((a, b) => Date.parse(b.modifiedTime) - Date.parse(a.modifiedTime) || a.name.localeCompare(b.name));
 }
 
 async function downloadFile(drive, meta) {
@@ -75,17 +94,20 @@ const isRetiredSource = (meta) => /compiled[\s_-]*credit[\s_-]*card[\s_-]*extra[
 async function readBothSources() {
   const drive = await driveClient();
   const listed = await listCandidateFiles(drive);
-  const all = listed.filter((m) => !isRetiredSource(m));
+  const all = listed.filter((m) => !isRetiredSource(m) && !isIgnoredRawSource(m));
   if (!all.length) throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  // Source identity comes from the validated table structure, never the file
-  // name. Drive already returns newest files first, so the newest valid Credit
-  // Card and Zone tables win independently.
+  const creditFiles = all.filter(isCcolOutletsSource);
+  const zoneFiles = all.filter((m) => !isCcolOutletsSource(m));
+  if (!creditFiles.length) throw new Error('No ccol_outlets_<start-date>_to_<end-date> source file was found in the configured Drive folder or its subfolders. The retired data file is intentionally ignored; the previous snapshot has been kept.');
+  // The dated CCoL export is the only Credit Card source. Zone Distribution
+  // remains structure-validated independently, including in subfolders.
   let credit = null, zone = null;
   const errors = [];
   const sheetsCache = new Map();
   async function tryFile(meta, { forCredit, forZone }) {
     if (Number(meta.size) > 30 * 1024 * 1024) return;
-    log('Checking', meta.name);
+    const displayName = meta.drivePath || meta.name;
+    log('Checking', displayName);
     const signature = remoteSignature(meta);
     let sheets = sheetsCache.get(signature);
     if (!sheets) {
@@ -94,18 +116,16 @@ async function readBothSources() {
         sheets = readWorkbookBuffer(buffer, meta.name);
         sheetsCache.set(signature, sheets);
       } catch (e) {
-        errors.push({ name: meta.name, error: e.message });
+        errors.push({ name: displayName, error: e.message });
         return;
       }
     }
-    const source = { fileName: meta.name, fileId: meta.id, modifiedTime: meta.modifiedTime, signature, folderId: FOLDER_ID };
-    if (forCredit && !credit) { try { credit = parseCredit(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
-    if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: meta.name, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
+    const source = { fileName: meta.name, filePath: displayName, fileId: meta.id, modifiedTime: meta.modifiedTime, signature, folderId: FOLDER_ID };
+    if (forCredit && !credit) { try { credit = parseCredit(sheets, source); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
+    if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
   }
-  for (const meta of all) {
-    if (credit && zone) break;
-    await tryFile(meta, { forCredit: !credit, forZone: !zone });
-  }
+  for (const meta of creditFiles) { if (credit) break; await tryFile(meta, { forCredit: true, forZone: false }); }
+  for (const meta of zoneFiles) { if (zone) break; await tryFile(meta, { forCredit: false, forZone: true }); }
   if (!credit || !zone) {
     throw new Error(`Could not validate ${!credit ? 'Credit Card' : ''}${!credit && !zone ? ' and ' : ''}${!zone ? 'Zone Distribution' : ''}. ${errors.slice(0, 2).map((e) => e.name + ': ' + e.error).join(' ')}`);
   }
