@@ -52,11 +52,13 @@ export function inferColumns(headers, lines, overrides = {}, channelIndexes = []
     const samples = lines.map(r => r[i]).filter(v => v !== '' && v != null).slice(0, 200);
     const numeric = samples.length > 0 && samples.filter(v => number(v) != null).length / samples.length > .85;
     const nativeRole=headerRole(label);
+    const nativeName=norm(label);
     let role=channelSet.has(i)&&!Object.hasOwn(overrides,String(label||'').trim())?'bank':headerRole(label, overrides);
     // The dated CCoL raw export has fixed non-bank fields in B:D. Bank
     // headings start at E and are intentionally positional so newly added or
     // removed banks require no code or column-rule changes.
     if(ignoredSet.has(i))role='other';
+    else if(layout.aggregateTotalColumn&&Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&/^(?:grand)?total(?:extraamount|opportunityloss|amount|cost|charge)?$/.test(nativeName))role='extra';
     else if(Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&(nativeRole==='other'||nativeRole==='bank'))role='bank';
     return { key:String(label || '').trim(), index:i, label:String(label || '').trim(), role, numeric };
   }).filter(c => c.key);
@@ -176,7 +178,7 @@ function metadata(table, source) {
   return {...source,sheetName:table.sheetName,headerRow:table.headerRow,period,elapsedDays,tillDays,monthDays,targetTotal};
 }
 export function parseCredit(sheets, source = {}, overrides = {}) {
-  const layout=isCcolOutletsSource(source)?{ignoredIndexes:[1,2,3],bankStartIndex:4}:{};
+  const layout=isCcolOutletsSource(source)?{ignoredIndexes:[1,2,3],bankStartIndex:4,aggregateTotalColumn:true}:{};
   const t=detectTable(sheets,'credit',overrides,layout); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
   const meta=metadata(t,source);
   const warnings=[];let invalidNumbers=0, totalMismatch=0, projectedFromRule=0, projectionUnavailable=0;
