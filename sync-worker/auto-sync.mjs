@@ -165,13 +165,7 @@ async function main() {
 
   const { credit, zone } = await readBothSources();
 
-  const creditSignatureChanged = credit.meta.signature !== currentPayload?.credit?.meta?.signature;
   const zoneSignatureChanged = zone.meta.signature !== currentPayload?.zone?.meta?.signature;
-
-  if (!creditSignatureChanged && !zoneSignatureChanged) {
-    log('No change in either source file. Nothing to publish.');
-    return;
-  }
 
   if (credit.warnings?.some((w) => w.includes('reported Extra Amount different'))) {
     throw new Error('Resolve the Extra Amount / channel-sum mismatch (Column rules or source formulas) before this can auto-publish. No snapshot was written.');
