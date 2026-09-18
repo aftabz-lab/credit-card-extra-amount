@@ -2,6 +2,12 @@
 export const norm = v => String(v ?? '').normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g, '');
 export const codeKey = v => String(v ?? '').trim().toUpperCase().replace(/\s+/g, '');
 export const clean = v => /^(#(N\/A|REF!|VALUE!|DIV\/0!|NAME\?|NUM!|SPILL!)|n\/a|null|undefined)$/i.test(String(v ?? '').trim()) ? '' : String(v ?? '').trim();
+export function sourceBaseName(value) {
+  const name=typeof value==='string'?value:(value?.name??value?.fileName??'');
+  return String(name).trim().split(/[\\/]/).pop().replace(/\.(xlsx|xlsm|csv|tsv)$/i,'').trim();
+}
+export const isCcolOutletsSource = value => /^ccol[\s_-]*outlets(?:$|[\s_-])/i.test(sourceBaseName(value));
+export const isIgnoredRawSource = value => /^data$/i.test(sourceBaseName(value));
 export function number(v) {
   if (v === '' || v == null || typeof v === 'boolean') return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : null;
@@ -39,12 +45,19 @@ export function headerRole(header, overrides = {}) {
   for (const b of Object.keys(BANKS)) if (n.startsWith(b) && /^(extra|charge|cost|amount|fee)/.test(n.slice(b.length))) return 'bank';
   return 'other';
 }
-export function inferColumns(headers, lines, overrides = {}, channelIndexes = []) {
+export function inferColumns(headers, lines, overrides = {}, channelIndexes = [], layout = {}) {
   const channelSet=new Set(channelIndexes);
+  const ignoredSet=new Set(layout.ignoredIndexes||[]);
   const cols = headers.map((label, i) => {
     const samples = lines.map(r => r[i]).filter(v => v !== '' && v != null).slice(0, 200);
     const numeric = samples.length > 0 && samples.filter(v => number(v) != null).length / samples.length > .85;
-    const role=channelSet.has(i)&&!Object.hasOwn(overrides,String(label||'').trim())?'bank':headerRole(label, overrides);
+    const nativeRole=headerRole(label);
+    let role=channelSet.has(i)&&!Object.hasOwn(overrides,String(label||'').trim())?'bank':headerRole(label, overrides);
+    // The dated CCoL raw export has fixed non-bank fields in B:D. Bank
+    // headings start at E and are intentionally positional so newly added or
+    // removed banks require no code or column-rule changes.
+    if(ignoredSet.has(i))role='other';
+    else if(Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&(nativeRole==='other'||nativeRole==='bank'))role='bank';
     return { key:String(label || '').trim(), index:i, label:String(label || '').trim(), role, numeric };
   }).filter(c => c.key);
   // Payment-channel columns form a contiguous block before Total Extra Amount.
@@ -77,16 +90,16 @@ function stackHeaderRows(upper, lower, overrides = {}) {
   }
   return {headers,channelIndexes};
 }
-export function detectTable(sheets, kind, overrides = {}) {
+export function detectTable(sheets, kind, overrides = {}, layout = {}) {
   const candidates = [], diagnostics = [], seen = new Set();
   const consider=(s,h,heads,preambleEnd,stacked=false,channelIndexes=[])=>{
-    const roles = heads.map(v => headerRole(v, overrides));
+    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides, channelIndexes, layout);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
+    const roles = cols.map(c => c.role);
     if (!roles.includes('code')) return;
     const isZone = roles.includes('leader') && roles.includes('zonal') && (roles.includes('format') || roles.includes('division') || roles.includes('district') || roles.includes('location'));
     if (kind === 'zone' && !isZone) return;
     if (kind === 'credit' && !roles.includes('extra') && !roles.includes('bank')) return;
     if (kind === 'credit' && isZone && !roles.includes('extra')) return;
-    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides, channelIndexes);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
     const signature=`${s.name}\u0000${h}\u0000${cols.map(c=>`${c.index}:${c.role}:${norm(c.key)}`).join('|')}`;
     if(seen.has(signature))return;seen.add(signature);
     const score = (kind === 'credit' ? (roles.includes('extra') ? 100 : 0) + cols.filter(c=>c.role==='bank').length * 4 : roles.filter(r=>r!=='other').length) + Math.min(s.grid.length / 10000, .9);
@@ -108,6 +121,16 @@ export function monthEndProjection(extra, meta = {}) {
   return amount!==null&&tillDays>0&&monthDays>0?amount/tillDays*monthDays:null;
 }
 const MONTH_LABELS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fileNamePeriod(value) {
+  const m=sourceBaseName(value).match(/(20\d{2})[-_](\d{2})[-_](\d{2})[\s_-]*to[\s_-]*(20\d{2})[-_](\d{2})[-_](\d{2})/i);
+  if(!m)return null;
+  const parts=m.slice(1).map(Number);
+  const start=new Date(Date.UTC(parts[0],parts[1]-1,parts[2]));const end=new Date(Date.UTC(parts[3],parts[4]-1,parts[5]));
+  if(start.getUTCFullYear()!==parts[0]||start.getUTCMonth()!==parts[1]-1||start.getUTCDate()!==parts[2]||end.getUTCFullYear()!==parts[3]||end.getUTCMonth()!==parts[4]-1||end.getUTCDate()!==parts[5]||end<start)return null;
+  const sameMonth=start.getUTCFullYear()===end.getUTCFullYear()&&start.getUTCMonth()===end.getUTCMonth();
+  const period=sameMonth?`${start.getUTCDate()}–${end.getUTCDate()} ${MONTH_LABELS[end.getUTCMonth()]} ${end.getUTCFullYear()}`:`${start.getUTCDate()} ${MONTH_LABELS[start.getUTCMonth()]} ${start.getUTCFullYear()}–${end.getUTCDate()} ${MONTH_LABELS[end.getUTCMonth()]} ${end.getUTCFullYear()}`;
+  return {day:end.getUTCDate(),monthDays:new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate(),period};
+}
 function modifiedPeriod(value) {
   const date=new Date(value);if(!Number.isFinite(date.getTime()))return null;
   let day,month,year;
@@ -141,6 +164,10 @@ function metadata(table, source) {
     }
   }
   if(!period) {
+    const inferred=fileNamePeriod(source.fileName);
+    if(inferred){tillDays=inferred.day;elapsedDays=inferred.day;monthDays=inferred.monthDays;period=inferred.period;}
+  }
+  if(!period) {
     const inferred=modifiedPeriod(source.modifiedTime);
     if(inferred){tillDays=inferred.day;elapsedDays=inferred.day;monthDays=inferred.monthDays;period=inferred.period;}
   }
@@ -149,7 +176,8 @@ function metadata(table, source) {
   return {...source,sheetName:table.sheetName,headerRow:table.headerRow,period,elapsedDays,tillDays,monthDays,targetTotal};
 }
 export function parseCredit(sheets, source = {}, overrides = {}) {
-  const t=detectTable(sheets,'credit',overrides); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
+  const layout=isCcolOutletsSource(source)?{ignoredIndexes:[1,2,3],bankStartIndex:4}:{};
+  const t=detectTable(sheets,'credit',overrides,layout); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
   const meta=metadata(t,source);
   const warnings=[];let invalidNumbers=0, totalMismatch=0, projectedFromRule=0, projectionUnavailable=0;
   for(let i=0;i<t.lines.length;i++) {

@@ -1,5 +1,5 @@
 import {readWorkbook} from './xlsx-reader.js?v=20260911-5';
-import {parseCredit,parseZone,zoneFromSnapshot} from './core.js?v=20260911-5';
+import {parseCredit,parseZone,zoneFromSnapshot,isCcolOutletsSource,isIgnoredRawSource} from './core.js?v=20260918-1';
 import {readCloudSnapshot,publishCloudSnapshotIfUnchanged,getPublisherSession,signInPublisher,signOutPublisher} from './supabase-sync.js';
 export {getPublisherSession,signInPublisher,signOutPublisher};
 export const FOLDER_ID='16HTr8nfPz4P2PMr4QB0bjgwiD110Qd-0';
@@ -33,10 +33,24 @@ export async function publish(payload,baseCloudTime=null){
   return {published:true,payload:committed};
 }
 const candidate=meta=>!meta.name.startsWith('~$')&&(/\.(xlsx|xlsm|csv|tsv)$/i.test(meta.name)||meta.mimeType==='application/vnd.google-apps.spreadsheet');
+const DRIVE_FOLDER_MIME='application/vnd.google-apps.folder';
 // The old reference workbook is retired as a source. It is never read again,
 // even as a fallback, even if it is still sitting in the shared Drive folder
 // or has a newer modified time than the current "Credit Card.xlsx" file.
 const isRetiredSource=meta=>/compiled[\s_-]*credit[\s_-]*card[\s_-]*extra[\s_-]*amount/i.test(meta.name);
+async function listDriveTree(Drive){
+  const files=[];const queue=[{id:FOLDER_ID,path:''}];const seen=new Set();
+  while(queue.length){
+    const folder=queue.shift();if(seen.has(folder.id))continue;seen.add(folder.id);
+    const children=await deadline(Drive.listFolderFiles(folder.id));
+    for(const meta of children){
+      const drivePath=folder.path?`${folder.path}/${meta.name}`:meta.name;
+      if(meta.mimeType===DRIVE_FOLDER_MIME)queue.push({id:meta.id,path:drivePath});
+      else files.push({...meta,drivePath});
+    }
+  }
+  return files;
+}
 async function download(meta){
   const Drive=window.ShwapnoDrive;
   if(meta.mimeType!=='application/vnd.google-apps.spreadsheet')return await deadline(Drive.downloadFile(meta),45000);
@@ -48,21 +62,25 @@ async function download(meta){
 const parsedCache=new Map();
 export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   const Drive=window.ShwapnoDrive;if(!Drive.cachedToken())throw new Error('Click Connect Google Drive to authorize this browser.');
-  const listed=await deadline(Drive.listFolderFiles(FOLDER_ID));const all=listed.filter(candidate).filter(m=>!isRetiredSource(m)).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
+  const listed=await listDriveTree(Drive);const all=listed.filter(candidate).filter(m=>!isRetiredSource(m)&&!isIgnoredRawSource(m)).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
   if(!all.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  // Source identity comes from the validated table structure, never the file
-  // name. The newest valid Credit Card and Zone tables win independently.
+  const creditFiles=all.filter(isCcolOutletsSource);const zoneFiles=all.filter(m=>!isCcolOutletsSource(m));
+  if(!creditFiles.length)throw new Error('No ccol_outlets_<start-date>_to_<end-date> source file was found in the configured Drive folder or its subfolders. The retired data file is intentionally ignored; the previous snapshot has been kept.');
+  // The dated CCoL export is the only Credit Card source. Zone Distribution
+  // remains structure-validated independently, including in subfolders.
   let credit=null,zone=null;const errors=[];const skipped=[];
   async function tryFile(meta,{forCredit,forZone}){
     if(Number(meta.size)>30*1024*1024){skipped.push(meta.name);return;}
-    onStatus(`Checking ${meta.name}`);
+    onStatus(`Checking ${meta.drivePath||meta.name}`);
     const signature=Drive.remoteSignature(meta);let sheets=parsedCache.get(signature);
-    try{if(!sheets){sheets=await readWorkbook(await download(meta));if(parsedCache.size>10)parsedCache.clear();parsedCache.set(signature,sheets);}}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message});return;}
-    const source={fileName:meta.name,fileId:meta.id,modifiedTime:meta.modifiedTime,signature,folderId:FOLDER_ID};
-    if(forCredit&&!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
-    if(forZone&&!zone)try{zone=parseZone(sheets,source);}catch(e){errors.push({name:meta.name,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
+    const displayName=meta.drivePath||meta.name;
+    try{if(!sheets){sheets=await readWorkbook(await download(meta));if(parsedCache.size>10)parsedCache.clear();parsedCache.set(signature,sheets);}}catch(e){errors.push({name:displayName,time:Date.parse(meta.modifiedTime),error:e.message});return;}
+    const source={fileName:meta.name,filePath:displayName,fileId:meta.id,modifiedTime:meta.modifiedTime,signature,folderId:FOLDER_ID};
+    if(forCredit&&!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){errors.push({name:displayName,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
+    if(forZone&&!zone)try{zone=parseZone(sheets,source);}catch(e){errors.push({name:displayName,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
   }
-  for(const meta of all){if(credit&&zone)break;await tryFile(meta,{forCredit:!credit,forZone:!zone});}
+  for(const meta of creditFiles){if(credit)break;await tryFile(meta,{forCredit:true,forZone:false});}
+  for(const meta of zoneFiles){if(zone)break;await tryFile(meta,{forCredit:false,forZone:true});}
   if(!credit||!zone)throw new Error(`Could not validate ${!credit?'Credit Card':''}${!credit&&!zone?' and ':''}${!zone?'Zone Distribution':''}. ${errors.filter(e=>e.kind).slice(0,2).map(e=>e.name+': '+e.error).join(' ')||errors.slice(0,2).map(e=>e.name+': '+e.error).join(' ')}${skipped.length?' Large files skipped: '+skipped.join(', '):''}`);
   return {credit,zone};
 }

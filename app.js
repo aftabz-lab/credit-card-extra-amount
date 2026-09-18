@@ -1,5 +1,5 @@
-import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260911-6';
-import * as Sync from './sync.js?v=20260911-5';
+import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260918-1';
+import * as Sync from './sync.js?v=20260918-1';
 import {createManagementWorkbook} from './management-xlsx.js?v=20260914-1';
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
