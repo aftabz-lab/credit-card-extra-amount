@@ -142,7 +142,8 @@ async function supabaseRequest(path, { method = 'GET', headers = {}, body } = {}
     const text = await res.text();
     throw new Error(`Supabase request failed (${res.status}): ${text.slice(0, 400)}`);
   }
-  return res.status === 204 ? null : res.json();
+  const text = await res.text();
+  return text.trim() ? JSON.parse(text) : null;
 }
 
 async function readSnapshot(key) {
