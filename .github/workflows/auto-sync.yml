@@ -1,4 +1,5 @@
 name: Auto-sync Credit Card Extra Amount snapshot
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.reason != '' && format('Drive change · {0}', inputs.reason) || github.event_name == 'schedule' && 'Scheduled backup check' || 'Auto-sync Credit Card Extra Amount snapshot' }}
 
 on:
   push:
@@ -8,9 +9,18 @@ on:
       - .github/workflows/auto-sync.yml
       - sync-worker/**
       - core.js
+  # Backup only. GitHub runs scheduled jobs late (often hours apart), so the
+  # instant path is the Drive change trigger (Google Apps Script), which starts
+  # this workflow through workflow_dispatch within a minute of a file change.
   schedule:
     - cron: "*/10 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "What changed in Drive (filled in automatically by the Drive change trigger)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: credit-card-auto-sync
@@ -40,4 +50,5 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TRIGGER_REASON: ${{ inputs.reason || github.event_name }}
         run: node auto-sync.mjs
