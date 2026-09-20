@@ -11,6 +11,11 @@
 // Optional:
 //   DRIVE_FOLDER_ID              - overrides the folder ID baked into sync.js
 //   SUPABASE_URL                 - overrides the URL baked into supabase-sync.js
+//   TRIGGER_REASON               - set by the workflow; logged only
+//
+// Instant updates: the Drive change trigger (Google Apps Script) starts this
+// workflow within about a minute of a file changing in the Drive folder. The
+// cron schedule in the workflow is only a backup.
 
 import { google } from 'googleapis';
 import { readWorkbookBuffer } from './xlsx-reader.node.mjs';
@@ -91,7 +96,7 @@ function remoteSignature(meta) {
 // or has a newer modified time than the current "Credit Card.xlsx" file.
 const isRetiredSource = (meta) => /compiled[\s_-]*credit[\s_-]*card[\s_-]*extra[\s_-]*amount/i.test(meta.name);
 
-async function readBothSources() {
+async function readBothSources(schemaOverrides = {}) {
   const drive = await driveClient();
   const listed = await listCandidateFiles(drive);
   const all = listed.filter((m) => !isRetiredSource(m) && !isIgnoredRawSource(m));
@@ -121,7 +126,7 @@ async function readBothSources() {
       }
     }
     const source = { fileName: meta.name, filePath: displayName, fileId: meta.id, modifiedTime: meta.modifiedTime, signature, folderId: FOLDER_ID };
-    if (forCredit && !credit) { try { credit = parseCredit(sheets, source); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
+    if (forCredit && !credit) { try { credit = parseCredit(sheets, source, schemaOverrides); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
     if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
   }
   for (const meta of creditFiles) { if (credit) break; await tryFile(meta, { forCredit: true, forZone: false }); }
@@ -160,11 +165,14 @@ async function upsertSnapshot(key, payload) {
 }
 
 async function main() {
+  log('Triggered by:', process.env.TRIGGER_REASON || 'unknown');
   const current = await readSnapshot(SNAPSHOT_KEY);
   const currentZone = await readSnapshot(ZONE_SNAPSHOT_KEY);
   const currentPayload = current?.payload;
 
-  const { credit, zone } = await readBothSources();
+  // Apply the published Column rules exactly as the dashboard's own
+  // "Read latest files" flow does (Sync.readDrive(state.activeRules)).
+  const { credit, zone } = await readBothSources(currentPayload?.schemaOverrides || {});
 
   const zoneSignatureChanged = zone.meta.signature !== currentPayload?.zone?.meta?.signature;
 
