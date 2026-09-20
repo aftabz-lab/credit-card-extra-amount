@@ -26,3 +26,13 @@ Set these two repository secrets under **Settings → Secrets and variables → 
 - `SUPABASE_SERVICE_ROLE_KEY` — from Supabase **Project Settings → API**. Used only server-side; never exposed to the browser.
 
 The workflow can also be run on demand from the **Actions** tab (`Run workflow`). It preserves any manual outlet mapping, exclusions, and column rules already published — it only replaces the Credit Card and Zone Distribution source data when a file's signature actually changes, and refuses to publish (leaving the previous snapshot in place) if the Extra Amount / channel-sum mismatch warning is present, the same safety check the dashboard itself applies.
+
+## Instant updates when a Drive file changes
+
+GitHub runs scheduled workflows late (in practice every few hours, not every 10 minutes), so the schedule above is only a backup. The instant path is a small Google Apps Script (supplied separately as `drive-instant-trigger_apps-script.zip`) that runs under the Drive owner's Google account:
+
+1. Every minute it lists the source folder and its subfolders (names, sizes and modified times only — it never opens or changes a file).
+2. When any spreadsheet is added, replaced, edited, renamed or removed, it starts this workflow through `workflow_dispatch`, passing the changed file name as `reason` (shown as the run name in the Actions tab).
+3. The workflow publishes the snapshot with the unchanged `core.js` rules, and every open dashboard loads it within about a second.
+
+Typical time from a file landing in Drive to the dashboard updating: about 1–2 minutes. The script needs one script property, `GITHUB_TOKEN`: a fine-grained GitHub token limited to this repository with **Actions: Read and write**.
