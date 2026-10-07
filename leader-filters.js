@@ -1,4 +1,4 @@
-// Leader-table filters only. Source parsing, mapping and snapshot rules stay in core.js / sync.js.
+// Summary-table filters only. Source parsing, mapping and snapshot rules stay in core.js / sync.js.
 export const AMOUNT_OPERATIONS=[
   ['eq','Equals...'],['ne','Does Not Equal...'],['gt','Greater Than...'],
   ['gte','Greater Than Or Equal To...'],['lt','Less Than...'],
@@ -64,25 +64,26 @@ function describe(rule){
   return `${label(rule.operator)} ${format(rule.value)} BDT`;
 }
 
-export function createLeaderFilters({getBanks,getSelectedBanks,setSelectedBanks,getAmount,setAmount}){
-  const $=id=>document.getElementById(id);
+export function createLeaderFilters({getBanks,getSelectedBanks,setSelectedBanks,getAmount,setAmount,prefix='leader',subject='leader'}){
+  const $=id=>document.getElementById(id.replace(/^leader-/,prefix+'-'));
+  const scopeHtml=html=>html.replace(/\bid="leader-/g,`id="${prefix}-`);
   const bankButton=$('leader-bank-button'),amountButton=$('leader-amount-button');
   const bankPanel=$('leader-bank-panel'),amountPanel=$('leader-amount-panel');
   const panel=$('leader-summary-panel');
-  bankPanel.innerHTML=`<div class="leader-filter-title">Bank/MFS</div><p class="leader-filter-note">All channels are included unless selected below.</p>
+  bankPanel.innerHTML=scopeHtml(`<div class="leader-filter-title">Bank/MFS</div><p class="leader-filter-note">All channels are included unless selected below.</p>
     <input id="leader-bank-search" type="search" placeholder="Search Bank/MFS" aria-label="Search Bank/MFS options">
     <div class="leader-bank-tools"><button type="button" class="text-button" id="leader-bank-select-all">Select all shown</button><button type="button" class="text-button" id="leader-bank-clear">Clear selection</button><span id="leader-bank-count"></span></div>
-    <div id="leader-bank-options" class="leader-bank-options" role="listbox" aria-label="Bank/MFS options" aria-multiselectable="true"></div>`;
+    <div id="leader-bank-options" class="leader-bank-options" role="listbox" aria-label="Bank/MFS options" aria-multiselectable="true"></div>`);
   const comparisonOptions=comparisons.map(([key,label])=>`<option value="${key}">${label.replace(/\.\.\.$/,'')}</option>`).join('');
-  amountPanel.innerHTML=`<div class="leader-filter-title">Amount</div><p class="leader-filter-note">Filter leader Total extra amount in BDT.</p>
+  amountPanel.innerHTML=scopeHtml(`<div class="leader-filter-title">Amount</div><p class="leader-filter-note">Filter ${subject} Total extra amount in BDT.</p>
     <div class="leader-amount-layout"><div class="leader-amount-menu" aria-label="Amount filter options">${AMOUNT_OPERATIONS.map(([key,label])=>`<button type="button" data-amount-operation="${key}" aria-pressed="false">${label}</button>`).join('')}</div>
     <form id="leader-amount-form" class="leader-amount-form" hidden><strong id="leader-amount-operation-label"></strong>
       <div id="leader-amount-simple"><label>Amount (BDT)<input id="leader-amount-value" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 10000"></label><label id="leader-amount-second-wrap" hidden>To amount (BDT)<input id="leader-amount-second" type="text" inputmode="decimal" autocomplete="off"></label></div>
-      <div id="leader-amount-top" hidden><label>Show<select id="leader-amount-rank"><option value="top">Top</option><option value="bottom">Bottom</option></select></label><label>Number<input id="leader-amount-top-count" type="number" min="1" step="1" value="10"></label><label>Of leaders<select id="leader-amount-top-unit"><option value="items">Items</option><option value="percent">Percent</option></select></label></div>
+      <div id="leader-amount-top" hidden><label>Show<select id="leader-amount-rank"><option value="top">Top</option><option value="bottom">Bottom</option></select></label><label>Number<input id="leader-amount-top-count" type="number" min="1" step="1" value="10"></label><label>Of ${subject}s<select id="leader-amount-top-unit"><option value="items">Items</option><option value="percent">Percent</option></select></label></div>
       <div id="leader-amount-custom" hidden><label>First condition<select id="leader-amount-first-op">${comparisonOptions}</select></label><label>Amount (BDT)<input id="leader-amount-first-value" type="text" inputmode="decimal" autocomplete="off"></label><label>Combine<select id="leader-amount-join"><option value="and">AND</option><option value="or">OR</option></select></label><label>Second condition<select id="leader-amount-second-op"><option value="">None</option>${comparisonOptions}</select></label><label>Amount (BDT)<input id="leader-amount-second-value" type="text" inputmode="decimal" autocomplete="off" disabled></label></div>
-      <p id="leader-amount-average" class="leader-filter-note" hidden>The average is calculated from the leaders in the current bank and dashboard filter selection.</p>
+      <p id="leader-amount-average" class="leader-filter-note" hidden>The average is calculated from the ${subject}s in the current bank and dashboard filter selection.</p>
       <p id="leader-amount-error" class="leader-filter-error" role="alert" hidden></p><button class="button small" type="submit">Apply</button>
-    </form></div><div class="leader-amount-footer"><button class="text-button" type="button" id="leader-amount-clear">Clear amount filter</button><button class="text-button" type="button" id="leader-amount-close">Close</button></div>`;
+    </form></div><div class="leader-amount-footer"><button class="text-button" type="button" id="leader-amount-clear">Clear amount filter</button><button class="text-button" type="button" id="leader-amount-close">Close</button></div>`);
   let draftOperator=null;
   function close(returnFocus=false){
     const button=bankPanel.hidden?amountButton:bankButton;
@@ -97,7 +98,7 @@ export function createLeaderFilters({getBanks,getSelectedBanks,setSelectedBanks,
   function renderBanks(){
     const banks=getBanks(),selected=getSelectedBanks(),query=$('leader-bank-search').value.toLocaleLowerCase().trim();
     const shown=banks.filter(bank=>String(bank.label).toLocaleLowerCase().includes(query));
-    const list=$('leader-bank-options'),scroll=list.scrollTop,focused=document.activeElement?.dataset.leaderBank;
+    const list=$('leader-bank-options'),scroll=list.scrollTop,focused=list.contains(document.activeElement)?document.activeElement?.dataset.leaderBank:null;
     const html=shown.map(bank=>`<label role="option" aria-selected="${selected.includes(bank.key)}"><input type="checkbox" data-leader-bank="${escapeHtml(bank.key)}" ${selected.includes(bank.key)?'checked':''}><span>${escapeHtml(bank.label)}</span></label>`).join('')||'<div class="leader-filter-note">No matching Bank/MFS.</div>';
     if(list.innerHTML!==html){list.innerHTML=html;list.scrollTop=scroll;if(focused)[...list.querySelectorAll('input')].find(input=>input.dataset.leaderBank===focused)?.focus({preventScroll:true});}
     $('leader-bank-count').textContent=selected.length?`${selected.length} selected / ${banks.length} available`:`All ${banks.length} Bank/MFS`;
@@ -130,7 +131,7 @@ export function createLeaderFilters({getBanks,getSelectedBanks,setSelectedBanks,
     const rule={operator:draftOperator};let error='';
     if(draftOperator==='top'){
       rule.count=parseAmount($('leader-amount-top-count').value);rule.bottom=$('leader-amount-rank').value==='bottom';rule.percent=$('leader-amount-top-unit').value==='percent';
-      if(rule.count===null||!Number.isInteger(rule.count)||rule.count<1||(rule.percent&&rule.count>100))error=rule.percent?'Enter a whole percentage from 1 to 100.':'Enter a positive whole number of leaders.';
+      if(rule.count===null||!Number.isInteger(rule.count)||rule.count<1||(rule.percent&&rule.count>100))error=rule.percent?'Enter a whole percentage from 1 to 100.':`Enter a positive whole number of ${subject}s.`;
     }else if(draftOperator==='custom'){
       rule.firstOperator=$('leader-amount-first-op').value;rule.value=parseAmount($('leader-amount-first-value').value);rule.secondOperator=$('leader-amount-second-op').value;rule.join=$('leader-amount-join').value;
       if(rule.secondOperator)rule.second=parseAmount($('leader-amount-second-value').value);
@@ -152,6 +153,6 @@ export function createLeaderFilters({getBanks,getSelectedBanks,setSelectedBanks,
     bankButton.title=selected.length?`Selected Bank/MFS: ${getBanks().filter(bank=>selected.includes(bank.key)).map(bank=>bank.label).join(', ')}`:'All Bank/MFS';
     amountButton.title=rule?describe(rule):'Filter leader amounts';
     const parts=[];if(selected.length)parts.push(`Bank/MFS: ${getBanks().filter(bank=>selected.includes(bank.key)).map(bank=>bank.label).join(', ')}`);if(rule)parts.push(`Amount: ${describe(rule)}`);
-    $('leader-filter-summary').hidden=!parts.length;$('leader-filter-summary').textContent=parts.length?`${parts.join(' · ')} · ${shown} of ${total} leaders`:'';
+    $('leader-filter-summary').hidden=!parts.length;$('leader-filter-summary').textContent=parts.length?`${parts.join(' · ')} · ${shown} of ${total} ${subject}s`:'';
   }};
 }

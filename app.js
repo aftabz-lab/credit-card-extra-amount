@@ -1,7 +1,7 @@
 import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260918-2';
 import * as Sync from './sync.js?v=20260918-2';
 import {createManagementWorkbook} from './management-xlsx.js?v=20260914-1';
-import {createLeaderFilters,applyAmountFilter} from './leader-filters.js?v=20261007-1';
+import {createLeaderFilters,applyAmountFilter} from './leader-filters.js?v=20261007-2';
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const colors=['#33bdb8','#607cf0','#edaa4b','#d66ab7','#64a5db','#91bf65','#ee6570','#9383d5','#48a881','#b28c61'];
@@ -11,7 +11,10 @@ const REFERENCE_PUBLISHED_AT='2026-09-08T17:14:25+06:00';
 const state={payload:null,rows:[],filtered:[],filters:{},banks:[],search:'',unit:'lac',tab:'overview',group:'leader',sort:'extra',direction:'desc',page:1,pageSize:50,visible:null,mappingPage:1,mappingSearch:'',mappingShow:'issues',dirty:false,busy:false,baseCloudTime:null,zoneTime:null,lastCloudTime:null,leaderSort:'extra',leaderDirection:'desc',mappingSort:'extra-desc',knownColumns:new Set(),cloudError:false,cloudFailures:0,ruleDraft:{},activeRules:{},pausedByConflict:false};
 const worker=new URL(location.href).searchParams.get('snapshot-worker')==='1';
 state.leaderAmount=null;
+state.outletAmount=null;
+state.outletSummarySort='extra';state.outletSummaryDirection='desc';
 const leaderFilters=createLeaderFilters({getBanks:()=>state.payload?.credit.banks||[],getSelectedBanks:()=>state.banks,setSelectedBanks:banks=>{state.banks=banks;state.page=1;render();},getAmount:()=>state.leaderAmount,setAmount:rule=>{state.leaderAmount=rule;renderLeaderTable();}});
+const outletFilters=createLeaderFilters({prefix:'outlet',subject:'outlet',getBanks:()=>state.payload?.credit.banks||[],getSelectedBanks:()=>state.banks,setSelectedBanks:banks=>{state.banks=banks;state.page=1;render();},getAmount:()=>state.outletAmount,setAmount:rule=>{state.outletAmount=rule;renderOutletSummary();}});
 if(worker)document.documentElement.classList.add('worker-mode');
 let toastTimer,pollBusy=false,autoBusy=false,refreshAt=0;
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,7000);}
@@ -72,6 +75,7 @@ function renderOverview(){
   const topcols=[{key:'code',label:'Code'},{key:'name',label:'Outlet name'},{key:'leader',label:'RHO / Leader'},{key:'zonal',label:'Zonal'},{key:'extra',label:bankMode?'Selected channel extra':'Extra amount',numeric:true},{key:'projection',label:'Month End Projection',numeric:true},{key:'mapping',label:'Mapping'}];
   $('top-outlets').innerHTML=renderTable(top.slice(0,6),topcols,{total:false});
   renderLeaderTable();
+  renderOutletSummary();
 }
 function renderCharts(){
   const banks=state.payload.credit.banks.filter(b=>!state.banks.length||state.banks.includes(b.key));const gs=groups(state.filtered,state.group,state.banks);const max=Math.max(...gs.map(g=>Math.abs(g.extra||0)),1);const limit=$('chart-limit').value;const shown=limit==='all'?gs:gs.slice(0,Number(limit));
@@ -116,6 +120,25 @@ function renderOutlets(){const cols=visibleColumns();const rows=sortRows(state.f
   $('outlet-title').textContent=`${count(rows.length)} outlet records`;$('outlet-table').innerHTML=renderTable(rows.slice(start,start+size),cols,{sortable:true});$('table-summary').textContent=rows.length?`${count(start+1)}–${count(Math.min(rows.length,start+size))} of ${count(rows.length)} · amounts in BDT`:'No matching rows';$('page-number').textContent=`${state.page} / ${pages}`;$('prev').disabled=state.page<=1;$('next').disabled=state.page>=pages;
   $('column-options').innerHTML=columns().map(c=>`<label><input type="checkbox" data-column="${esc(c.key)}" ${state.visible.has(c.key)?'checked':''} ${c.key==='code'?'disabled':''}>${esc(c.label)}</label>`).join('');
 }
+function outletSummary(){
+  const banks=state.payload.credit.banks.filter(b=>!state.banks.length||state.banks.includes(b.key));
+  const all=groups(state.filtered,'code',state.banks).map(g=>({...g,code:g.name,name:g.rows[0].name,zonal:g.rows[0].zonal,leader:g.rows[0].leader,bankValues:Object.fromEntries(banks.map(b=>[b.key,g.rows.reduce((sum,row)=>sum+(row.bankValues[b.key]??0),0)]))}));
+  const list=sortRows(applyAmountFilter(all,state.outletAmount),state.outletSummarySort,state.outletSummaryDirection);
+  const rows=list.flatMap(g=>g.rows),view=totals(rows,state.banks);
+  return {banks,list,total:all.length,rows,view};
+}
+function outletSummaryColumns(banks){return [{key:'code',label:'Outlet code'},{key:'name',label:'Outlet name'},{key:'zonal',label:'Zonal'},{key:'leader',label:'RHO / Leader'},...banks.map(b=>({key:'bank:'+b.key,label:b.label,numeric:true})),{key:'extra',label:'Total extra amount',numeric:true},{key:'projection',label:'Month End Projection',numeric:true},{key:'extra',label:'Share',numeric:true,percent:true}];}
+function outletSummaryValue(g,c,view){return c.percent?pct((g.extra??0)/(view.extra||1)):c.key.startsWith('bank:')?g.bankValues[c.key.slice(5)]:g[c.key];}
+function renderOutletSummary(){
+  const {banks,list,total,rows,view}=outletSummary(),cols=outletSummaryColumns(banks);
+  outletFilters.sync({shown:list.length,total});
+  if(!list.length){$('outlet-summary-table').innerHTML='<div class="empty">No outlets match this view. Adjust or reset the filters.</div>';return;}
+  const header=cols.map(c=>`<th class="${c.numeric?'num':''}" ${c.key===state.outletSummarySort?`aria-sort="${state.outletSummaryDirection==='asc'?'ascending':'descending'}"`:''}><button data-outlet-summary-sort="${esc(c.key)}">${esc(c.label)} ${c.key===state.outletSummarySort?(state.outletSummaryDirection==='asc'?'↑':'↓'):'↕'}</button></th>`).join('');
+  const body=list.map(g=>`<tr>${cols.map(c=>{const value=outletSummaryValue(g,c,view);return `<td class="${c.numeric?'num':''}" title="${esc(value??'')}">${c.percent?value:c.numeric?money(value,'bdt',false):esc(value||'—')}</td>`;}).join('')}</tr>`).join('');
+  const footer=cols.map((c,i)=>`<td class="${c.numeric?'num':''}">${i===0?'VIEW TOTAL':c.percent?'100%':c.key.startsWith('bank:')?money(rows.reduce((sum,row)=>sum+(row.bankValues[c.key.slice(5)]??0),0),'bdt',false):c.numeric?money(view[c.key],'bdt',false):''}</td>`).join('');
+  $('outlet-summary-table').innerHTML=`<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody><tfoot><tr>${footer}</tr></tfoot></table>`;
+}
+function exportOutletSummary(){const {banks,list,view}=outletSummary(),cols=outletSummaryColumns(banks);download('Credit-Card-Outlet-Wise.csv',csv(cols.map(c=>c.label),list.map(g=>cols.map(c=>outletSummaryValue(g,c,view)))));}
 function mappingRows(){return state.rows.filter(r=>{if(state.mappingShow==='issues'&&!r.autoExcluded)return false;if(state.mappingShow==='manual'&&r.mapping!=='manual')return false;if(state.mappingShow==='excluded'&&!r.excluded)return false;const q=state.mappingSearch.toLowerCase();return !q||[r.code,r.name,r.leader,r.zonal].join(' ').toLowerCase().includes(q);}).sort((a,b)=>state.mappingSort==='code'?a.code.localeCompare(b.code):state.mappingSort==='leader'?a.leader.localeCompare(b.leader):state.mappingSort==='mapping'?a.mapping.localeCompare(b.mapping):(state.mappingSort==='extra-asc'?1:-1)*((a.extra??0)-(b.extra??0)));}
 function renderMapping(){
   const issues=state.rows.filter(r=>r.autoExcluded);const manualExcluded=state.rows.filter(r=>r.manualExcluded);const list=mappingRows();const pages=Math.max(1,Math.ceil(list.length/50));state.mappingPage=Math.min(state.mappingPage,pages);
@@ -204,6 +227,7 @@ document.addEventListener('click',async e=>{
   if(b.dataset.tab)tab(b.dataset.tab);
   if(b.dataset.group){state.group=b.dataset.group;document.querySelectorAll('[data-group]').forEach(x=>x.classList.toggle('active',x===b));renderCharts();}
   if(b.dataset.leaderSort){state.leaderDirection=state.leaderSort===b.dataset.leaderSort?(state.leaderDirection==='asc'?'desc':'asc'):'desc';state.leaderSort=b.dataset.leaderSort;renderLeaderTable();}
+  if(b.dataset.outletSummarySort){state.outletSummaryDirection=state.outletSummarySort===b.dataset.outletSummarySort?(state.outletSummaryDirection==='asc'?'desc':'asc'):'desc';state.outletSummarySort=b.dataset.outletSummarySort;renderOutletSummary();}
   if(b.dataset.sort){state.direction=state.sort===b.dataset.sort?(state.direction==='asc'?'desc':'asc'):'desc';state.sort=b.dataset.sort;renderOutlets();}
   if(b.dataset.drill){state.filters[state.group]=[b.dataset.drill];state.page=1;render();}
   if(b.dataset.bankDrill){state.banks=[b.dataset.bankDrill];state.page=1;render();}
@@ -221,7 +245,7 @@ document.addEventListener('change',e=>{const el=e.target;
 document.addEventListener('input',e=>{if(e.target.dataset.optionSearch)for(const label of e.target.closest('.filter-popover').querySelectorAll('[data-option-label]'))label.hidden=!label.dataset.optionLabel.includes(e.target.value.toLowerCase());});
 document.addEventListener('click',e=>{document.querySelectorAll('[data-filter-box][open]').forEach(d=>{if(!d.contains(e.target))d.open=false;});});
 $('search').oninput=e=>{state.search=e.target.value;state.page=1;render();};
-$('reset').onclick=()=>{state.search='';$('search').value='';state.filters={};state.banks=[];state.leaderAmount=null;state.page=1;render();};
+$('reset').onclick=()=>{state.search='';$('search').value='';state.filters={};state.banks=[];state.leaderAmount=null;state.outletAmount=null;state.page=1;render();};
 $('unit').onchange=e=>{state.unit=e.target.value;storePreference('credit-card-unit',state.unit);renderOverview();};
 $('chart-limit').onchange=renderCharts;
 $('data-button').onclick=()=>tab('data');$('all-outlets').onclick=()=>tab('outlets');
@@ -232,6 +256,7 @@ $('exclude-unmatched').onclick=()=>toast('Unresolved outlets are already omitted
 $('restore-excluded').onclick=async()=>{for(const r of state.rows.filter(r=>r.manualExcluded))state.payload.overrides[r.id]={...r.manual,excluded:false,updatedAt:new Date().toISOString()};await draft();toast('All manually excluded outlets restored. Unresolved mappings remain omitted.');};
 $('export').onclick=exportManagement;
 $('leader-export').onclick=()=>{const {banks,gs}=leaderSummary({amountFiltered:true});download('Credit-Card-Leader-Wise.csv',csv(['RHO / Leader','Outlets',...banks.map(b=>b.label),'Total extra amount','Month End Projection'],gs.map(g=>[g.name,g.outlets,...banks.map(b=>g.rows.reduce((s,r)=>s+(r.bankValues[b.key]??0),0)),g.extra,g.projection])));};
+$('outlet-summary-export').onclick=exportOutletSummary;
 $('mapping-export').onclick=()=>download('Credit-Card-Mapping-Backup.json',JSON.stringify({format:'credit-card-mapping-v1',exportedAt:new Date().toISOString(),overrides:state.payload.overrides,schemaOverrides:state.activeRules},null,2),'application/json');
 $('mapping-import').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;if(file.size>5*1024*1024)throw new Error('Mapping backup is too large.');const p=JSON.parse(await file.text());if(p.format!=='credit-card-mapping-v1'||!p.overrides||typeof p.overrides!=='object'||Array.isArray(p.overrides))throw new Error('Choose a mapping backup exported from this dashboard.');const valid={};for(const [key,v] of Object.entries(p.overrides)){if(['__proto__','constructor','prototype'].includes(key)||!v||typeof v!=='object')continue;valid[key]={leader:clean(v.leader),zonal:clean(v.zonal),excluded:v.excluded===true,updatedAt:new Date().toISOString()};}state.payload.overrides={...state.payload.overrides,...valid};for(const [key,value] of Object.entries(p.schemaOverrides||{}))if(ROLES.includes(value)&&!['__proto__','constructor','prototype'].includes(key))state.ruleDraft[key]=value;await draft();toast('Mapping backup imported. Apply Column rules to use any imported header rules.');}catch(err){toast(err.message);}e.target.value='';};
 $('refresh').onclick=()=>doRefresh();
