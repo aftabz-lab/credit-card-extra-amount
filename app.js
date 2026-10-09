@@ -281,3 +281,21 @@ async function init(){try{
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){poll();renderConnection();}});
 }catch(e){banner(e.message);$('period').textContent='Data unavailable';$('source-badge').textContent='Setup required';}}
 init();
+
+// SHWAPNO Ask AI: read-only backend data bridge v1.
+if (!worker) window.ShwapnoDashboardData=Object.freeze({version:1,id:'credit-card',async read({global=false}={}){
+  if(!state.payload)throw new Error('Credit Card backend data is still loading.');
+  const rows=global?state.rows.filter(r=>!r.excluded):state.filtered;
+  const banks=global?[]:state.banks;
+  const cols=columns();
+  const records=rows.map(row=>Object.fromEntries(cols.map(c=>[c.key,metric(row,c.key,banks)])));
+  const t=totals(rows,banks);
+  const bankFacts=state.payload.credit.banks.map(b=>({label:b.label+' extra amount',value:totals(rows,[b.key]).extra,unit:'BDT'}));
+  return {id:'credit-card',ready:true,source:'Credit Card backend: '+(state.payload.credit.meta.fileName||'published raw data'),snapshot:snapshotTime(state.payload),scope:(global?'all eligible outlets':'current dashboard filters and bank selection')+'; existing mapping exclusions remain applied; amounts in BDT',
+    filters:[...Object.entries(state.filters).map(([label,value])=>({label,value:value.join(', ')})),{label:'Banks / MFS',value:banks.join(', ')||'All'}],
+    facts:[{label:'Total extra amount',value:t.extra,unit:'BDT'},{label:'Month-end projection',value:t.projection,unit:'BDT'},{label:'Eligible outlets',value:t.outlets},{label:'Charged outlets',value:t.charged},...bankFacts],
+    datasets:[{id:'outlets',title:'Eligible outlet payment amounts',rows:records,columns:cols,identity:['code','name','leader','zonal','division','district']},
+      {id:'leaders',title:'RHO leader summary',rows:groups(rows,'leader',banks).map(({rows,...r})=>r),identity:['name']},
+      {id:'zonals',title:'Zonal summary',rows:groups(rows,'zonal',banks).map(({rows,...r})=>r),identity:['name']},
+      {id:'banks',title:'Bank MFS payment channels',rows:state.payload.credit.banks.map(b=>({bank:b.label,key:b.key})),identity:['bank']}]};
+}});
