@@ -1,0 +1,35 @@
+/* Outlet Detail layout only; existing dashboard styles and fonts are retained. */
+#outlet-detail-panel > .panel-heading {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface);
+  border-radius: 9px 9px 0 0;
+}
+#outlet-table th { top: var(--outlet-detail-header-offset, 0px); }
+.outlet-detail-scrollbar {
+  position: fixed;
+  bottom: 0;
+  z-index: 40;
+  height: 18px;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  scrollbar-color: var(--muted) var(--surface2);
+  scrollbar-width: auto;
+}
+.outlet-detail-scrollbar::-webkit-scrollbar { height: 16px; }
+.outlet-detail-scrollbar::-webkit-scrollbar-track { background: var(--surface2); }
+.outlet-detail-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border: 3px solid var(--surface2);
+  border-radius: 8px;
+}
+.outlet-detail-scrollbar:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
+#outlet-detail-scroll-track { height: 1px; }
+@media print {
+  #outlet-detail-panel > .panel-heading { position: static; }
+  #outlet-table th { top: 0; }
+  .outlet-detail-scrollbar { display: none !important; }
+}

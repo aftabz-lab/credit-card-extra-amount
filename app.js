@@ -33,7 +33,8 @@ function columns(){
   if(!state.payload)return [];
   return [{key:'code',label:'Outlet code'},{key:'name',label:'Outlet name'},{key:'leader',label:'RHO / Leader'},{key:'zonal',label:'Zonal'},{key:'extra',label:state.banks.length?'Selected bank extra':'Extra amount',numeric:true},{key:'projection',label:'Projection',numeric:true},{key:'target',label:'Target',numeric:true},{key:'saving',label:'Save amount',numeric:true},{key:'incentive',label:'Incentive',numeric:true},{key:'sales',label:'POS & MFS sales',numeric:true},...state.payload.credit.banks.map(b=>({key:'bank:'+b.key,label:b.label,numeric:true})),...['format','division','district','location','mapping'].map(key=>({key,label:key==='mapping'?'Mapping':key[0].toUpperCase()+key.slice(1)})),...state.payload.credit.columns.filter(c=>c.role==='other').map(c=>({key:'raw:'+c.key,label:c.label,numeric:c.numeric}))];
 }
-function visibleColumns(){const cols=columns();return cols.filter(c=>state.visible?.has(c.key));}
+function outletDetailColumns(){return columns().filter(c=>!['name','target','saving'].includes(c.key));}
+function visibleColumns(){const cols=outletDetailColumns();return cols.filter(c=>state.visible?.has(c.key));}
 function cell(r,c){let v=metric(r,c.key,state.banks);if(state.banks.length&&['projection','target','saving','incentive'].includes(c.key))v=null;if(c.key==='mapping')return `<span class="status-tag ${esc(r.mapping)}">${mappingLabels[r.mapping]}</span>`;return c.numeric?money(number(v),'bdt',false):esc(v||'—');}
 function renderTable(rows,cols,{sortable=false,total=true}={}){
   if(!rows.length)return '<div class="empty">No outlets match this view. Adjust or reset the filters.</div>';
@@ -118,7 +119,7 @@ function renderLeaderTable(){
 }
 function renderOutlets(){const cols=visibleColumns();const rows=sortRows(state.filtered,state.sort,state.direction,state.banks);const size=state.pageSize==='all'?Math.max(rows.length,1):Number(state.pageSize);const pages=Math.max(1,Math.ceil(rows.length/size));state.page=Math.min(state.page,pages);const start=(state.page-1)*size;
   $('outlet-title').textContent=`${count(rows.length)} outlet records`;$('outlet-table').innerHTML=renderTable(rows.slice(start,start+size),cols,{sortable:true});$('table-summary').textContent=rows.length?`${count(start+1)}–${count(Math.min(rows.length,start+size))} of ${count(rows.length)} · amounts in BDT`:'No matching rows';$('page-number').textContent=`${state.page} / ${pages}`;$('prev').disabled=state.page<=1;$('next').disabled=state.page>=pages;
-  $('column-options').innerHTML=columns().map(c=>`<label><input type="checkbox" data-column="${esc(c.key)}" ${state.visible.has(c.key)?'checked':''} ${c.key==='code'?'disabled':''}>${esc(c.label)}</label>`).join('');
+  $('column-options').innerHTML=outletDetailColumns().map(c=>`<label><input type="checkbox" data-column="${esc(c.key)}" ${state.visible.has(c.key)?'checked':''} ${c.key==='code'?'disabled':''}>${esc(c.label)}</label>`).join('');
 }
 function outletSummary(){
   const banks=state.payload.credit.banks.filter(b=>!state.banks.length||state.banks.includes(b.key));
