@@ -225,7 +225,14 @@ export function parseZone(sheets, source={}) {
 export function zoneFromSnapshot(snapshot) {
   if(!Array.isArray(snapshot?.rows)||!snapshot.rows.length)throw new Error('No published Zone Distribution rows.');
   const keys=[...new Set(snapshot.rows.flatMap(r=>Object.keys(r)))];
-  return parseZone([{name:snapshot.sheetName||'Zone snapshot',grid:[keys,...snapshot.rows.map(r=>keys.map(k=>r[k]??''))]}],{fileName:snapshot.fileName,savedAt:snapshot.savedAt,signature:snapshot.fileSignature});
+  // Published rows already use the parsed field names (code, name, leader,
+  // zonal, location…). "name" and "location" are not header aliases, so they
+  // were dropped on re-read and every outlet showed "Unnamed outlet". Give any
+  // such field its standard heading (e.g. "outlet name", "location type") so
+  // the Drive outlet name and location are kept. Detection rules are unchanged.
+  const taken=new Set(keys.map(norm));
+  const headers=keys.map(k=>{const label=Object.hasOwn(ALIASES,k)&&headerRole(k)!==k?ALIASES[k][0]:null;return label&&!taken.has(norm(label))?label:k;});
+  return parseZone([{name:snapshot.sheetName||'Zone snapshot',grid:[headers,...snapshot.rows.map(r=>keys.map(k=>r[k]??''))]}],{fileName:snapshot.fileName,savedAt:snapshot.savedAt,signature:snapshot.fileSignature});
 }
 export function joinRows(credit,zone,overrides={}) {
   const index=new Map(); for(const r of zone?.rows||[]) {const key=codeKey(r.code);if(!index.has(key))index.set(key,[]);index.get(key).push(r);}
@@ -244,7 +251,12 @@ export function joinRows(credit,zone,overrides={}) {
     const leader=resolvedLeader||(!zone?clean(r.sourceLeader):'')||'Unassigned';
     const zonal=resolvedZonal||(!zone?clean(r.sourceZonal):'')||'Unassigned';
     const autoExcluded=!mappingEligible,manualExcluded=manual.excluded===true;
-    return {...r,projection:monthEndProjection(r.extra,credit.meta),uid:`${r.id}:${idx}`,name:z?.name||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,mappingEligible,autoExcluded,manualExcluded,excluded:autoExcluded||manualExcluded,manual};
+    // Outlet name always comes from the Zone Distribution file in Drive. When a
+    // code appears more than once there but every copy has the same name, that
+    // name is still used (RHO / Zonal eligibility rules are unchanged).
+    const zoneNames=[...new Set(matches.map(m=>clean(m.name)).filter(Boolean))];
+    const zoneName=clean(z?.name)||(zoneNames.length===1?zoneNames[0]:'');
+    return {...r,projection:monthEndProjection(r.extra,credit.meta),uid:`${r.id}:${idx}`,name:zoneName||r.name||'Unnamed outlet',leader,zonal,format:z?.format||'Unspecified',division:z?.division||'Unspecified',district:z?.district||'Unspecified',area:z?.area||'',location:z?.location||'Unspecified',outletStatus:z?.status||'Unspecified',mapping,blankCode,mappingEligible,autoExcluded,manualExcluded,excluded:autoExcluded||manualExcluded,manual};
   });
 }
 export function metric(row,key,selectedBanks=[]) {
