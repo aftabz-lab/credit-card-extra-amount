@@ -57,9 +57,10 @@ export function inferColumns(headers, lines, overrides = {}, channelIndexes = []
     // The dated CCoL raw export has fixed non-bank fields in B:D. Bank
     // headings start at E and are intentionally positional so newly added or
     // removed banks require no code or column-rule changes.
+    const applyLayout=!layout.respectOverrides||!Object.hasOwn(overrides,String(label||'').trim());
     if(ignoredSet.has(i))role='other';
-    else if(layout.aggregateTotalColumn&&Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&/^(?:grand)?total(?:extraamount|opportunityloss|amount|cost|charge)?$/.test(nativeName))role='extra';
-    else if(Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&(nativeRole==='other'||nativeRole==='bank'))role='bank';
+    else if(applyLayout&&layout.aggregateTotalColumn&&Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&/^(?:grand)?total(?:extraamount|opportunityloss|amount|cost|charge)?$/.test(nativeName))role='extra';
+    else if(applyLayout&&Number.isInteger(layout.bankStartIndex)&&i>=layout.bankStartIndex&&(nativeRole==='other'||nativeRole==='bank'))role='bank';
     return { key:String(label || '').trim(), index:i, label:String(label || '').trim(), role, numeric };
   }).filter(c => c.key);
   // Payment-channel columns form a contiguous block before Total Extra Amount.
@@ -69,7 +70,7 @@ export function inferColumns(headers, lines, overrides = {}, channelIndexes = []
   const code = cols.find(c => c.role === 'code');
   if (total && (bankPositions.length || code)) {
     const first = bankPositions.length ? Math.min(...bankPositions) : code.index;
-    for (const c of cols) if (c.role === 'other' && c.numeric && c.index > first && c.index < total.index && !Object.hasOwn(overrides,c.key) && !/sales|rate|percent|%|count|transaction|target|projection|amountpaid/i.test(c.key)) c.role = 'bank';
+    for (const c of cols) if (c.role === 'other' && c.numeric && c.index > first && c.index < total.index && !Object.hasOwn(overrides,c.key) && !/sales|rate|percent|%|count|transaction|txns?|target|projection|amountpaid/i.test(c.key)) c.role = 'bank';
   }
   const used = new Set();
   for (const c of cols) { if (used.has(c.key)) throw new Error(`Duplicate column heading: ${c.key}. Give each column a distinct name.`); used.add(c.key); }
@@ -95,7 +96,11 @@ function stackHeaderRows(upper, lower, overrides = {}) {
 export function detectTable(sheets, kind, overrides = {}, layout = {}) {
   const candidates = [], diagnostics = [], seen = new Set();
   const consider=(s,h,heads,preambleEnd,stacked=false,channelIndexes=[])=>{
-    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides, channelIndexes, layout);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
+    // Transaction-count tabs share the bank headings but contain counts,
+    // not the opportunity-loss amounts used by this dashboard.
+    if(kind==='credit'&&heads.some(v=>/^total(?:loss|opportunityloss)?(?:txns?|transactions?)$/.test(norm(v)))&&!heads.some(v=>headerRole(v,overrides)==='extra'))return;
+    const candidateLayout=typeof layout==='function'?layout(heads):layout;
+    let cols;try{cols = inferColumns(heads, s.grid.slice(h+1), overrides, channelIndexes, candidateLayout);}catch(e){diagnostics.push(`${s.name}: ${e.message}`);return;}
     const roles = cols.map(c => c.role);
     if (!roles.includes('code')) return;
     const isZone = roles.includes('leader') && roles.includes('zonal') && (roles.includes('format') || roles.includes('division') || roles.includes('district') || roles.includes('location'));
@@ -177,8 +182,21 @@ function metadata(table, source) {
   if(tc) for(const row of table.preamble) {const n=number(row[tc.index]);if(n!==null&&n>1)targetTotal=n;}
   return {...source,sheetName:table.sheetName,headerRow:table.headerRow,period,elapsedDays,tillDays,monthDays,targetTotal};
 }
+function creditAmountLayout(headers,source) {
+  if(headerRole(headers[0])!=='code')return {};
+  const amountHeaders=headers.slice(4);
+  if(amountHeaders.some(v=>/txn|transaction/.test(norm(v))))return {};
+  const legacy=isCcolOutletsSource(source);
+  const outletFields=['name','leader','zonal'].every((role,i)=>headerRole(headers[i+1])===role);
+  const hasBanks=amountHeaders.some(v=>headerRole(v)==='bank');
+  const hasAmountTotal=amountHeaders.some(v=>headerRole(v)==='extra');
+  if(!legacy&&!hasBanks&&!(outletFields&&hasAmountTotal))return {};
+  // Detect this bank-amount block from the headings, independently of the
+  // file name. Keep B:D out of the bank sum and exclude aggregate totals.
+  return {ignoredIndexes:legacy?[1,2,3]:[],bankStartIndex:4,aggregateTotalColumn:true,respectOverrides:!legacy};
+}
 export function parseCredit(sheets, source = {}, overrides = {}) {
-  const layout=isCcolOutletsSource(source)?{ignoredIndexes:[1,2,3],bankStartIndex:4,aggregateTotalColumn:true}:{};
+  const layout=headers=>creditAmountLayout(headers,source);
   const t=detectTable(sheets,'credit',overrides,layout); const records=[]; const banks=t.columns.filter(c=>c.role==='bank').map(c=>({key:c.key,label:BANKS[norm(c.key)]||c.key}));
   const meta=metadata(t,source);
   const warnings=[];let invalidNumbers=0, totalMismatch=0, projectedFromRule=0, projectionUnavailable=0;

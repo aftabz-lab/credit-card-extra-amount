@@ -1,5 +1,5 @@
 import {readWorkbook} from './xlsx-reader.js?v=20260911-5';
-import {parseCredit,parseZone,zoneFromSnapshot,isCcolOutletsSource,isIgnoredRawSource} from './core.js?v=20260918-2';
+import {parseCredit,parseZone,zoneFromSnapshot,isIgnoredRawSource} from './core.js?v=credit-bank-source-v4-20261015';
 import {readCloudSnapshot,publishCloudSnapshotIfUnchanged,getPublisherSession,signInPublisher,signOutPublisher} from './supabase-sync.js';
 export {getPublisherSession,signInPublisher,signOutPublisher};
 export const FOLDER_ID='16HTr8nfPz4P2PMr4QB0bjgwiD110Qd-0';
@@ -64,10 +64,8 @@ export async function readDrive(schemaOverrides={},onStatus=()=>{}){
   const Drive=window.ShwapnoDrive;if(!Drive.cachedToken())throw new Error('Click Connect Google Drive to authorize this browser.');
   const listed=await listDriveTree(Drive);const all=listed.filter(candidate).filter(m=>!isRetiredSource(m)&&!isIgnoredRawSource(m)).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime)||a.name.localeCompare(b.name));
   if(!all.length)throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  const creditFiles=all.filter(isCcolOutletsSource);const zoneFiles=all.filter(m=>!isCcolOutletsSource(m));
-  if(!creditFiles.length)throw new Error('No ccol_outlets_<start-date>_to_<end-date> source file was found in the configured Drive folder or its subfolders. The retired data file is intentionally ignored; the previous snapshot has been kept.');
-  // The dated CCoL export is the only Credit Card source. Zone Distribution
-  // remains structure-validated independently, including in subfolders.
+  // Pick the newest structurally valid credit and mapping tables. A renamed
+  // export remains eligible; retired/data workbooks stay excluded above.
   let credit=null,zone=null;const errors=[];const skipped=[];
   async function tryFile(meta,{forCredit,forZone}){
     if(Number(meta.size)>30*1024*1024){skipped.push(meta.name);return;}
@@ -79,8 +77,7 @@ export async function readDrive(schemaOverrides={},onStatus=()=>{}){
     if(forCredit&&!credit)try{credit=parseCredit(sheets,source,schemaOverrides);}catch(e){errors.push({name:displayName,time:Date.parse(meta.modifiedTime),error:e.message,kind:'credit'});}
     if(forZone&&!zone)try{zone=parseZone(sheets,source);}catch(e){errors.push({name:displayName,time:Date.parse(meta.modifiedTime),error:e.message,kind:'zone'});}
   }
-  for(const meta of creditFiles){if(credit)break;await tryFile(meta,{forCredit:true,forZone:false});}
-  for(const meta of zoneFiles){if(zone)break;await tryFile(meta,{forCredit:false,forZone:true});}
+  for(const meta of all){if(credit&&zone)break;await tryFile(meta,{forCredit:!credit,forZone:!zone});}
   if(!credit||!zone)throw new Error(`Could not validate ${!credit?'Credit Card':''}${!credit&&!zone?' and ':''}${!zone?'Zone Distribution':''}. ${errors.filter(e=>e.kind).slice(0,2).map(e=>e.name+': '+e.error).join(' ')||errors.slice(0,2).map(e=>e.name+': '+e.error).join(' ')}${skipped.length?' Large files skipped: '+skipped.join(', '):''}`);
   return {credit,zone};
 }

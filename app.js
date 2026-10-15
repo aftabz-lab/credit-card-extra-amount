@@ -1,5 +1,5 @@
-import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=20260918-2';
-import * as Sync from './sync.js?v=20260918-2';
+import {norm,number,clean,joinRows,filterRows,totals,groups,sortRows,metric,csv,parseCredit,ROLES} from './core.js?v=credit-bank-source-v4-20261015';
+import * as Sync from './sync.js?v=credit-bank-source-v4-20261015';
 import {createManagementWorkbook} from './management-xlsx.js?v=20260914-1';
 import {createLeaderFilters,applyAmountFilter} from './leader-filters.js?v=20261007-2';
 const $=id=>document.getElementById(id);
