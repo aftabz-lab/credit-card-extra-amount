@@ -19,7 +19,7 @@
 
 import { google } from 'googleapis';
 import { readWorkbookBuffer } from './xlsx-reader.node.mjs';
-import { parseCredit, parseZone, isCcolOutletsSource, isIgnoredRawSource } from '../core.js';
+import { parseCredit, parseZone, isIgnoredRawSource } from '../core.js';
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wstxgbzmsbosinmhhjbl.supabase.co';
 const SUPABASE_TABLE = 'dashboard_snapshots';
@@ -101,11 +101,8 @@ async function readBothSources(schemaOverrides = {}) {
   const listed = await listCandidateFiles(drive);
   const all = listed.filter((m) => !isRetiredSource(m) && !isIgnoredRawSource(m));
   if (!all.length) throw new Error('No Excel or Google Sheets files were found in the configured source folder.');
-  const creditFiles = all.filter(isCcolOutletsSource);
-  const zoneFiles = all.filter((m) => !isCcolOutletsSource(m));
-  if (!creditFiles.length) throw new Error('No ccol_outlets_<start-date>_to_<end-date> source file was found in the configured Drive folder or its subfolders. The retired data file is intentionally ignored; the previous snapshot has been kept.');
-  // The dated CCoL export is the only Credit Card source. Zone Distribution
-  // remains structure-validated independently, including in subfolders.
+  // Pick the newest structurally valid credit and mapping tables without
+  // depending on a file-name prefix. Existing exclusions still apply above.
   let credit = null, zone = null;
   const errors = [];
   const sheetsCache = new Map();
@@ -129,8 +126,7 @@ async function readBothSources(schemaOverrides = {}) {
     if (forCredit && !credit) { try { credit = parseCredit(sheets, source, schemaOverrides); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'credit' }); } }
     if (forZone && !zone) { try { zone = parseZone(sheets, source); } catch (e) { errors.push({ name: displayName, time: Date.parse(meta.modifiedTime), error: e.message, kind: 'zone' }); } }
   }
-  for (const meta of creditFiles) { if (credit) break; await tryFile(meta, { forCredit: true, forZone: false }); }
-  for (const meta of zoneFiles) { if (zone) break; await tryFile(meta, { forCredit: false, forZone: true }); }
+  for (const meta of all) { if (credit && zone) break; await tryFile(meta, { forCredit: !credit, forZone: !zone }); }
   if (!credit || !zone) {
     throw new Error(`Could not validate ${!credit ? 'Credit Card' : ''}${!credit && !zone ? ' and ' : ''}${!zone ? 'Zone Distribution' : ''}. ${errors.slice(0, 2).map((e) => e.name + ': ' + e.error).join(' ')}`);
   }
